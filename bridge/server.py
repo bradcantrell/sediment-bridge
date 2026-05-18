@@ -141,7 +141,7 @@ class JobManager:
             self._update(job_id, "failed", 100, error=str(e))
 
     def _parse_velocity(self):
-        """Parse U field and return simplified velocity data."""
+        """Parse U field and return velocity data on a grid matching Stam solver."""
         # Find latest time directory
         time_dirs = sorted(
             [d for d in CASE_DIR.iterdir() 
@@ -173,7 +173,6 @@ class JobManager:
                     continue
                 if count is not None and '(' in s:
                     reading = True
-                    # Parse first value if on same line
                     idx = s.find('(')
                     rest = s[idx+1:]
                     if rest and ')' not in rest:
@@ -189,19 +188,55 @@ class JobManager:
                     if len(nums) >= 3:
                         vals.append((float(nums[0]), float(nums[1])))
         
-        # Downsample for transfer: take every Nth value to get ~2000 points
-        step = max(1, len(vals) // 2000)
-        sampled = vals[::step]
+        # Interpolate to Stam grid (160×90) for side-by-side comparison
+        from case_generator import NX_BG, NY_BG, DOMAIN_W, DOMAIN_H
+        STAM_NX, STAM_NY = 160, 90
+        
+        # Approximate cell positions from blockMesh ordering
+        n_bg = NX_BG * NY_BG  # Background cells only
+        grid_ux = [[0.0] * STAM_NX for _ in range(STAM_NY)]
+        grid_uy = [[0.0] * STAM_NX for _ in range(STAM_NY)]
+        grid_mag = [[0.0] * STAM_NX for _ in range(STAM_NY)]
+        grid_count = [[0] * STAM_NX for _ in range(STAM_NY)]
+        
+        for idx, (ux, uy) in enumerate(vals):
+            # Map cell index to approximate (i,j) in background mesh
+            frac = idx / max(len(vals) - 1, 1)
+            i_bg = int((frac * n_bg) % NX_BG)
+            j_bg = int((frac * n_bg) / NX_BG) % NY_BG
+            # Map to Stam grid
+            si = int(i_bg * STAM_NX / NX_BG)
+            sj = int(j_bg * STAM_NY / NY_BG)
+            if 0 <= si < STAM_NX and 0 <= sj < STAM_NY:
+                grid_ux[sj][si] += ux
+                grid_uy[sj][si] += uy
+                grid_mag[sj][si] += (ux*ux + uy*uy) ** 0.5
+                grid_count[sj][si] += 1
+        
+        # Average and fill gaps
+        mag_flat = []
+        for j in range(STAM_NY):
+            for i in range(STAM_NX):
+                if grid_count[j][i] > 0:
+                    grid_ux[j][i] /= grid_count[j][i]
+                    grid_uy[j][i] /= grid_count[j][i]
+                    grid_mag[j][i] /= grid_count[j][i]
+                    mag_flat.append(grid_mag[j][i])
+                else:
+                    mag_flat.append(0.0)
         
         return {
             "n_cells": len(vals),
-            "sampled": len(sampled),
-            "ux": [v[0] for v in sampled],
-            "uy": [v[1] for v in sampled],
             "ux_min": min(v[0] for v in vals),
             "ux_max": max(v[0] for v in vals),
             "ux_mean": sum(v[0] for v in vals) / len(vals),
             "reverse_cells": sum(1 for v in vals if v[0] < 0),
+            # Grid data for side-by-side comparison (160×90 = Stam resolution)
+            "grid": {
+                "nx": STAM_NX, "ny": STAM_NY,
+                "mag": mag_flat,  # Flattened row-major
+                "mag_max": max(mag_flat) if mag_flat else 1.0,
+            }
         }
 
     def _update(self, job_id, status, progress, result=None, error=None):

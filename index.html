@@ -743,6 +743,9 @@ function draw() {
 
   // HUD
   updateHUD();
+  
+  // Update comparison panel if visible
+  if (showComparison) drawComparison();
 }
 
 // ─────────────────────────────────────────────
@@ -833,6 +836,103 @@ function keyPressed() {
 
 const BRIDGE_URL = 'http://localhost:8090';
 let baking = false;
+let comparisonData = null;
+let showComparison = false;
+
+function renderComparison(ofGrid) {
+  comparisonData = ofGrid;
+  showComparison = true;
+  drawComparison();
+}
+
+function drawComparison() {
+  if (!showComparison || !comparisonData) return;
+  
+  const nx = NX, ny = NY;
+  const ofMag = comparisonData.mag;
+  const ofMax = comparisonData.mag_max;
+  
+  // Build Stam velocity magnitude from u[], v[]
+  const stamMag = [];
+  let stamMax = 0;
+  for (let j = 1; j <= NY; j++) {
+    for (let i = 1; i <= NX; i++) {
+      const idx = IX(i, j);
+      const spd = Math.sqrt(u[idx]*u[idx] + v[idx]*v[idx]);
+      stamMag.push(spd);
+      if (spd > stamMax) stamMax = spd;
+    }
+  }
+  
+  // Shared color scale: use Stam max for consistency
+  const scaleMax = Math.max(stamMax, ofMax * 0.6); // Scale OF down since it's in m/s
+  
+  // Create overlay canvas
+  let overlay = document.getElementById('comparison-canvas');
+  if (!overlay) {
+    overlay = document.createElement('canvas');
+    overlay.id = 'comparison-canvas';
+    overlay.style.cssText = 'position:fixed;bottom:0;left:0;z-index:15;border-top:1px solid rgba(255,255,255,0.1);';
+    document.body.appendChild(overlay);
+  }
+  
+  const cw = Math.min(window.innerWidth, 1280);
+  const ch = 200;
+  overlay.width = cw;
+  overlay.height = ch;
+  overlay.style.width = cw + 'px';
+  overlay.style.height = ch + 'px';
+  
+  const ctx = overlay.getContext('2d');
+  const halfW = Math.floor(cw / 2);
+  const cellW_c = halfW / nx;
+  const cellH_c = ch / ny;
+  
+  function velColor(t) {
+    t = Math.max(0, Math.min(1, Math.pow(t, 0.55)));
+    let r, g, b;
+    if (t < 0.25) { r=0; g=t*4; b=1; }
+    else if (t < 0.5) { r=0; g=1; b=1-(t-0.25)*4; }
+    else if (t < 0.75) { r=(t-0.5)*4; g=1; b=0; }
+    else { r=1; g=1-(t-0.75)*4; b=0; }
+    return `rgb(${Math.floor(r*255)},${Math.floor(g*255)},${Math.floor(b*255)})`;
+  }
+  
+  // Left: Stam
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const t = stamMag[j * nx + i] / scaleMax;
+      ctx.fillStyle = velColor(t);
+      ctx.fillRect(i * cellW_c, j * cellH_c, cellW_c + 0.5, cellH_c + 0.5);
+    }
+  }
+  
+  // Right: OpenFOAM
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const ofIdx = j * nx + i;
+      const t = (ofMag[ofIdx] || 0) / (scaleMax * 1.67); // Scale to Stam units
+      ctx.fillStyle = velColor(t);
+      ctx.fillRect(halfW + i * cellW_c, j * cellH_c, cellW_c + 0.5, cellH_c + 0.5);
+    }
+  }
+  
+  // Divider
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(halfW, 0);
+  ctx.lineTo(halfW, ch);
+  ctx.stroke();
+  
+  // Labels
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '11px monospace';
+  ctx.fillText('← Stam (live)', 8, 14);
+  ctx.fillText('OpenFOAM (baked) →', halfW + 8, 14);
+  ctx.fillText(stamMax.toFixed(1) + ' g.u.', 8, ch - 6);
+  ctx.fillText(ofMax.toFixed(1) + ' m/s', halfW + 8, ch - 6);
+}
 
 async function bakeToOpenFOAM() {
   if (baking) return;
@@ -894,6 +994,8 @@ async function bakeToOpenFOAM() {
             'U<sub>x</sub>: <span class="of-val">' + r.ux_min.toFixed(2) + '</span> … <span class="of-val">' + r.ux_max.toFixed(2) + '</span> m/s<br>' +
             'mean: <span class="of-val">' + r.ux_mean.toFixed(2) + '</span> m/s<br>' +
             'reverse: <span class="of-val">' + r.reverse_cells + ' cells (' + pctRev + '%)</span>';
+          // Render side-by-side comparison
+          if (r.grid) renderComparison(r.grid);
         }
       } else if (status.status === 'failed') {
         done = true;
