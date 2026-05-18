@@ -23,6 +23,26 @@
     #hud .val { color: rgba(255,200,100,0.8); }
     #hud .warn { color: rgba(255,120,80,0.8); }
 
+    #bake-btn {
+      position: fixed; top: 16px; right: 16px;
+      font-family: 'Courier New', monospace;
+      font-size: 13px; color: #fa0; background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,200,100,0.3);
+      padding: 8px 18px; cursor: pointer; z-index: 20;
+      transition: all 0.2s;
+    }
+    #bake-btn:hover { background: rgba(255,200,100,0.15); border-color: #fa0; }
+    #bake-btn.baking { color: rgba(255,255,255,0.4); border-color: rgba(255,255,255,0.15); pointer-events: none; }
+
+    #bake-result {
+      position: fixed; bottom: 50px; right: 16px;
+      font-family: 'Courier New', monospace; font-size: 11px;
+      color: rgba(255,255,255,0.5); text-align: right;
+      z-index: 20; pointer-events: none; line-height: 1.6;
+      max-width: 280px;
+    }
+    #bake-result .of-val { color: rgba(100,200,255,0.8); }
+
     #help {
       position: fixed; bottom: 16px; left: 50%;
       transform: translateX(-50%);
@@ -44,7 +64,9 @@
     &phi;: <span class="val" id="rot">0</span>&deg;<br>
     <span class="warn" id="paused"></span>
   </div>
-  <div id="help">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; space pause &middot; S save</div>
+  <div id="help">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
+  <button id="bake-btn" onclick="bakeToOpenFOAM()">⚙ BAKE</button>
+  <div id="bake-result"></div>
 
 <script>
 // ─────────────────────────────────────────────
@@ -793,6 +815,8 @@ function keyPressed() {
     dragging = false;
   } else if (key === 's' || key === 'S') {
     saveCanvas('sediment-' + floor(simTime), 'png');
+  } else if (key === 'b' || key === 'B') {
+    bakeToOpenFOAM();
   } else if (key === 'r' || key === 'R') {
     // Reset
     depoBuffer.clear();
@@ -801,6 +825,88 @@ function keyPressed() {
     simTime = 0;
   }
   return false;
+}
+
+// ─────────────────────────────────────────────
+// OPENFOAM BRIDGE
+// ─────────────────────────────────────────────
+
+const BRIDGE_URL = 'http://localhost:8090';
+let baking = false;
+
+async function bakeToOpenFOAM() {
+  if (baking) return;
+  baking = true;
+  
+  const btn = document.getElementById('bake-btn');
+  const result = document.getElementById('bake-result');
+  btn.textContent = '⟳ BAKING...';
+  btn.className = 'baking';
+  result.innerHTML = 'sending state...';
+  
+  // Collect state
+  const state = {
+    obstacles: obstacles.map(ob => ({
+      type: ob.type,
+      x: ob.x,
+      y: ob.y,
+      size: ob.size,
+      rotation: ob.rotation
+    })),
+    inflow: INFLOW,
+    width: width,
+    height: height
+  };
+  
+  try {
+    // POST state to bridge
+    const resp = await fetch(BRIDGE_URL + '/bake', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state)
+    });
+    const data = await resp.json();
+    
+    if (data.error) {
+      result.innerHTML = '<span style="color:#f66">error: ' + data.error + '</span>';
+      baking = false;
+      btn.textContent = '⚙ BAKE';
+      btn.className = '';
+      return;
+    }
+    
+    // Poll until complete
+    let done = false;
+    while (!done) {
+      await new Promise(r => setTimeout(r, 500));
+      const statusResp = await fetch(BRIDGE_URL + '/status');
+      const status = await statusResp.json();
+      
+      result.innerHTML = status.status + ' <span style="color:#888">' + status.progress + '%</span>';
+      
+      if (status.status === 'complete') {
+        done = true;
+        const r = status.result;
+        if (r) {
+          const pctRev = (r.reverse_cells / r.n_cells * 100).toFixed(1);
+          result.innerHTML = 
+            'OF cells: <span class="of-val">' + r.n_cells + '</span><br>' +
+            'U<sub>x</sub>: <span class="of-val">' + r.ux_min.toFixed(2) + '</span> … <span class="of-val">' + r.ux_max.toFixed(2) + '</span> m/s<br>' +
+            'mean: <span class="of-val">' + r.ux_mean.toFixed(2) + '</span> m/s<br>' +
+            'reverse: <span class="of-val">' + r.reverse_cells + ' cells (' + pctRev + '%)</span>';
+        }
+      } else if (status.status === 'failed') {
+        done = true;
+        result.innerHTML = '<span style="color:#f66">failed: ' + (status.error || 'unknown') + '</span>';
+      }
+    }
+  } catch (e) {
+    result.innerHTML = '<span style="color:#f66">connection failed<br>is bridge server running?</span>';
+  }
+  
+  baking = false;
+  btn.textContent = '⚙ BAKE';
+  btn.className = '';
 }
 
 function windowResized() {
