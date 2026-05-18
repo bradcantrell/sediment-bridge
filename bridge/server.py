@@ -76,17 +76,37 @@ class JobManager:
                 shutil.rmtree(CASE_DIR)
             create_case(state, CASE_DIR)
             
+            # Check for bed morphology
+            depo_png = state_dict.get("depo_png", "")
+            has_bed = depo_png and len(depo_png) > 100  # Non-trivial PNG data
+            
             of_prefix = "source /usr/share/openfoam/etc/bashrc && "
             
-            # blockMesh
-            self._update(job_id, "blockMesh", 20)
-            proc = subprocess.run(
-                of_prefix + f"blockMesh -case {CASE_DIR}",
-                shell=True, executable='/bin/bash',
-                capture_output=True, text=True, timeout=300
-            )
-            if proc.returncode != 0:
-                raise RuntimeError(f"blockMesh failed: {proc.stderr[-300:]}")
+            if has_bed:
+                # Standard blockMesh first, then displace bottom vertices
+                self._update(job_id, "blockMesh", 15)
+                proc = subprocess.run(
+                    of_prefix + f"blockMesh -case {CASE_DIR}",
+                    shell=True, executable='/bin/bash',
+                    capture_output=True, text=True, timeout=300
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(f"blockMesh failed: {proc.stderr[-300:]}")
+                
+                # Displace bottom by bed heightfield
+                self._update(job_id, "displacing bed", 20)
+                from displace_bed import displace_bottom
+                displace_bottom(CASE_DIR, depo_png)
+            else:
+                # Standard blockMesh with flat bottom
+                self._update(job_id, "blockMesh", 20)
+                proc = subprocess.run(
+                    of_prefix + f"blockMesh -case {CASE_DIR}",
+                    shell=True, executable='/bin/bash',
+                    capture_output=True, text=True, timeout=300
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(f"blockMesh failed: {proc.stderr[-300:]}")
             
             # snappyHexMesh
             self._update(job_id, "snappyHexMesh", 40)

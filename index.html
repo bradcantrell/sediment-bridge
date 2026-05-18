@@ -955,7 +955,8 @@ async function bakeToOpenFOAM() {
     })),
     inflow: INFLOW,
     width: width,
-    height: height
+    height: height,
+    depo_png: depoBuffer.elt.toDataURL('image/png')  // Bed morphology
   };
   
   try {
