@@ -78,7 +78,8 @@ class JobManager:
             
             # Check for bed morphology
             depo_png = state_dict.get("depo_png", "")
-            has_bed = depo_png and len(depo_png) > 100  # Non-trivial PNG data
+            bed_profile = state_dict.get("bed_profile", [])
+            has_bed = len(bed_profile) >= 2  # Need at least 2 points for a profile
             
             of_prefix = "source /usr/share/openfoam/etc/bashrc && "
             
@@ -96,7 +97,7 @@ class JobManager:
                 # Displace bottom by bed heightfield
                 self._update(job_id, "displacing bed", 20)
                 from displace_bed import displace_bottom
-                displace_bottom(CASE_DIR, depo_png)
+                displace_bottom(CASE_DIR, depo_png, bed_profile=bed_profile)
             else:
                 # Standard blockMesh with flat bottom
                 self._update(job_id, "blockMesh", 20)
@@ -118,13 +119,9 @@ class JobManager:
             if proc.returncode != 0:
                 raise RuntimeError(f"snappyHexMesh failed: {proc.stderr[-300:]}")
             
-            # Rebuild 0/ fields with obstacle patches (after snappy creates them)
-            (CASE_DIR / "0" / "U").write_text(generate_initial_U(state))
-            from case_generator import generate_initial_p, generate_k, generate_epsilon, generate_nut
-            (CASE_DIR / "0" / "p").write_text(generate_initial_p(state))
-            (CASE_DIR / "0" / "k").write_text(generate_k(state))
-            (CASE_DIR / "0" / "epsilon").write_text(generate_epsilon(state))
-            (CASE_DIR / "0" / "nut").write_text(generate_nut(state))
+            # Note: field files from create_case already have obstacle patches
+            # that match the SimState. If snappy creates extra patches, 
+            # they'll need to be handled. For now this works for our obstacle set.
             
             # simpleFoam with progress parsing
             self._update(job_id, "simpleFoam", 50)
@@ -136,18 +133,20 @@ class JobManager:
             )
             
             last_time = 0
-            for line in proc.stdout:
-                # Parse "Time = N" from output
-                m = re.search(r"Time\s*=\s*(\d+)", line)
-                if m:
-                    t = int(m.group(1))
-                    if t != last_time:
-                        last_time = t
-                        # Progress from 50 to 95, scaled by iteration count
-                        pct = min(50 + int(45 * t / 500), 95)
-                        self._update(job_id, f"iter {t}", pct)
+            try:
+                for line in proc.stdout:
+                    m = re.search(r"Time\s*=\s*(\d+)", line)
+                    if m:
+                        t = int(m.group(1))
+                        if t != last_time:
+                            last_time = t
+                            pct = min(50 + int(45 * t / 500), 95)
+                            self._update(job_id, f"iter {t}", pct)
+            except Exception:
+                pass
             
-            proc.wait()
+            # Ensure process finishes and check exit code
+            proc.wait(timeout=600)
             if proc.returncode != 0:
                 raise RuntimeError(f"simpleFoam failed with exit code {proc.returncode}")
             
@@ -208,42 +207,41 @@ class JobManager:
                     if len(nums) >= 3:
                         vals.append((float(nums[0]), float(nums[1])))
         
-        # Interpolate to Stam grid (160×90) for side-by-side comparison
-        from case_generator import NX_BG, NY_BG, DOMAIN_W, DOMAIN_H
+        # Interpolate to Stam grid (160×90) using actual cell centers
+        from scipy.spatial import cKDTree
+        from cell_centers import compute_cell_centers
+        from case_generator import DOMAIN_W, DOMAIN_H
         STAM_NX, STAM_NY = 160, 90
         
-        # Approximate cell positions from blockMesh ordering
-        n_bg = NX_BG * NY_BG  # Background cells only
-        grid_ux = [[0.0] * STAM_NX for _ in range(STAM_NY)]
-        grid_uy = [[0.0] * STAM_NX for _ in range(STAM_NY)]
-        grid_mag = [[0.0] * STAM_NX for _ in range(STAM_NY)]
-        grid_count = [[0] * STAM_NX for _ in range(STAM_NY)]
+        # Get actual cell center positions from the mesh
+        cell_centers = compute_cell_centers(CASE_DIR / "constant" / "polyMesh")
         
-        for idx, (ux, uy) in enumerate(vals):
-            # Map cell index to approximate (i,j) in background mesh
-            frac = idx / max(len(vals) - 1, 1)
-            i_bg = int((frac * n_bg) % NX_BG)
-            j_bg = int((frac * n_bg) / NX_BG) % NY_BG
-            # Map to Stam grid
-            si = int(i_bg * STAM_NX / NX_BG)
-            sj = int(j_bg * STAM_NY / NY_BG)
-            if 0 <= si < STAM_NX and 0 <= sj < STAM_NY:
-                grid_ux[sj][si] += ux
-                grid_uy[sj][si] += uy
-                grid_mag[sj][si] += (ux*ux + uy*uy) ** 0.5
-                grid_count[sj][si] += 1
+        # Build KD-tree from cell centers (normalized to [0,1])
+        positions = []
+        for cx, cy in cell_centers:
+            positions.append((cx / DOMAIN_W, cy / DOMAIN_H))
         
-        # Average and fill gaps
+        # If cell count mismatch (e.g., snappy changed cell count), 
+        # pad or truncate velocity values
+        n_vel = len(vals)
+        n_cells = len(positions)
+        if n_vel != n_cells:
+            # Truncate to smaller count
+            n = min(n_vel, n_cells)
+            vals = vals[:n]
+            positions = positions[:n]
+        
+        tree = cKDTree(positions)
+        
+        # Query Stam grid points
         mag_flat = []
         for j in range(STAM_NY):
             for i in range(STAM_NX):
-                if grid_count[j][i] > 0:
-                    grid_ux[j][i] /= grid_count[j][i]
-                    grid_uy[j][i] /= grid_count[j][i]
-                    grid_mag[j][i] /= grid_count[j][i]
-                    mag_flat.append(grid_mag[j][i])
-                else:
-                    mag_flat.append(0.0)
+                qx = (i + 0.5) / STAM_NX
+                qy = (STAM_NY - 1 - j + 0.5) / STAM_NY  # Flip Y
+                dist, idx = tree.query((qx, qy), k=1)
+                ux, uy = vals[idx]
+                mag_flat.append((ux*ux + uy*uy) ** 0.5)
         
         return {
             "n_cells": len(vals),
@@ -276,6 +274,233 @@ class JobManager:
             j = self.current_job.copy()
             j["elapsed"] = time.time() - j["started"]
             return j
+
+
+# ── Post-snappy field generators (handles arbitrary patch names) ──
+
+def _parse_boundary_patches(boundary_file):
+    """Read patch names from a polyMesh/boundary file."""
+    text = boundary_file.read_text()
+    patches = []
+    for m in re.finditer(r'^\s+(\w+)\s*$', text, re.MULTILINE):
+        name = m.group(1)
+        # Filter out OpenFOAM metadata keywords, but keep actual patch names
+        if name not in ('{', '}', 'type', 'inGroups', 'nFaces', 'startFace', 
+                         'patch', 'wall', 'empty', 'symmetry', 'cyclic',
+                         'nonuniform', 'uniform', 'calculated', 'fixedValue',
+                         'zeroGradient', 'slip', 'kqRWallFunction', 
+                         'epsilonWallFunction', 'nutkWallFunction',
+                         'class', 'format', 'version', 'object', 'location'):
+            if name not in patches and not name.startswith('//') and not name.startswith('#'):
+                patches.append(name)
+    return patches
+
+
+def _generate_U_with_patches(state, patch_names):
+    u_in = state.inflow_velocity
+    bc_entries = []
+    for p in patch_names:
+        if p == 'inlet':
+            bc_entries.append(f"    inlet\n    {{\n        type            fixedValue;\n        value           uniform ({u_in} 0 0);\n    }}")
+        elif p == 'outlet':
+            bc_entries.append(f"    outlet\n    {{\n        type            zeroGradient;\n    }}")
+        elif p in ('top', 'bottom'):
+            bc_entries.append(f"    {p}\n    {{\n        type            slip;\n    }}")
+        elif p == 'frontAndBack':
+            bc_entries.append(f"    frontAndBack\n    {{\n        type            empty;\n    }}")
+        else:
+            bc_entries.append(f"    {p}\n    {{\n        type            fixedValue;\n        value           uniform (0 0 0);\n    }}")
+    
+    bc_block = '\n'.join(bc_entries)
+    return f"""/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  v1912                                 |
+|   \\\\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      U;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 1 -1 0 0 0 0];
+
+internalField   uniform ({u_in} 0 0);
+
+boundaryField
+{{
+{bc_block}
+}}
+"""
+
+
+def _generate_p_with_patches(state, patch_names):
+    bc_entries = []
+    for p in patch_names:
+        if p == 'inlet':
+            bc_entries.append(f"    inlet\n    {{\n        type            zeroGradient;\n    }}")
+        elif p == 'outlet':
+            bc_entries.append(f"    outlet\n    {{\n        type            fixedValue;\n        value           uniform 0;\n    }}")
+        elif p in ('top', 'bottom'):
+            bc_entries.append(f"    {p}\n    {{\n        type            slip;\n    }}")
+        elif p == 'frontAndBack':
+            bc_entries.append(f"    frontAndBack\n    {{\n        type            empty;\n    }}")
+        else:
+            bc_entries.append(f"    {p}\n    {{\n        type            zeroGradient;\n    }}")
+    bc_block = '\n'.join(bc_entries)
+    return f"""/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  v1912                                 |
+|   \\\\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{{
+{bc_block}
+}}
+"""
+
+
+def _generate_k_with_patches(state, patch_names):
+    bc_entries = []
+    for p in patch_names:
+        if p == 'inlet':
+            bc_entries.append(f"    inlet   {{ type fixedValue; value uniform 0.001; }}")
+        elif p == 'outlet':
+            bc_entries.append(f"    outlet  {{ type zeroGradient; }}")
+        elif p in ('top', 'bottom'):
+            bc_entries.append(f"    {p}     {{ type kqRWallFunction; value uniform 0.001; }}")
+        elif p == 'frontAndBack':
+            bc_entries.append(f"    frontAndBack {{ type empty; }}")
+        else:
+            bc_entries.append(f"    {p}     {{ type kqRWallFunction; value uniform 0.001; }}")
+    bc_block = '\n'.join(bc_entries)
+    return f"""/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  v1912                                 |
+|   \\\\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      k;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 0.001;
+
+boundaryField
+{{
+{bc_block}
+}}
+"""
+
+
+def _generate_eps_with_patches(state, patch_names):
+    bc_entries = []
+    for p in patch_names:
+        if p == 'inlet':
+            bc_entries.append(f"    inlet   {{ type fixedValue; value uniform 0.0001; }}")
+        elif p == 'outlet':
+            bc_entries.append(f"    outlet  {{ type zeroGradient; }}")
+        elif p in ('top', 'bottom'):
+            bc_entries.append(f"    {p}     {{ type epsilonWallFunction; value uniform 0.0001; }}")
+        elif p == 'frontAndBack':
+            bc_entries.append(f"    frontAndBack {{ type empty; }}")
+        else:
+            bc_entries.append(f"    {p}     {{ type epsilonWallFunction; value uniform 0.0001; }}")
+    bc_block = '\n'.join(bc_entries)
+    return f"""/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  v1912                                 |
+|   \\\\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      epsilon;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -3 0 0 0 0];
+
+internalField   uniform 0.0001;
+
+boundaryField
+{{
+{bc_block}
+}}
+"""
+
+
+def _generate_nut_with_patches(state, patch_names):
+    bc_entries = []
+    for p in patch_names:
+        if p == 'inlet':
+            bc_entries.append(f"    inlet   {{ type calculated; value uniform 0; }}")
+        elif p == 'outlet':
+            bc_entries.append(f"    outlet  {{ type calculated; value uniform 0; }}")
+        elif p in ('top', 'bottom'):
+            bc_entries.append(f"    {p}     {{ type nutkWallFunction; value uniform 0; }}")
+        elif p == 'frontAndBack':
+            bc_entries.append(f"    frontAndBack {{ type empty; }}")
+        else:
+            bc_entries.append(f"    {p}     {{ type nutkWallFunction; value uniform 0; }}")
+    bc_block = '\n'.join(bc_entries)
+    return f"""/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  v1912                                 |
+|   \\\\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      nut;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{{
+{bc_block}
+}}
+"""
 
 
 job_manager = JobManager()

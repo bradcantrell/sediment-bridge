@@ -57,20 +57,82 @@ def decode_png_heights(b64_data: str) -> list:
     return heights
 
 
-def displace_bottom(case_dir: Path, b64_png: str, max_depth: float = 0.02):
-    """Read polyMesh/points, displace bottom vertices by bed heightfield."""
+def profile_to_heights(bed_profile: list, nx: int, ny: int, domain_w: float, domain_h: float,
+                       max_depth: float = 0.02, heights_png: list = None) -> list:
+    """Convert a bed profile (list of {x, z} px points) to a 2D heightfield [ny][nx].
+    The profile defines z(x) in pixel space; we interpolate to the full grid.
+    PNG deposition data is added on top if provided.
+    Returns list of lists [ny][nx] with heights in meters.
+    """
+    points = bed_profile  # [{x: px, z: px}]
+    if len(points) < 2:
+        # No profile — use PNG only or flat
+        if heights_png:
+            return [[heights_png[y][x] * max_depth for x in range(nx)] for y in range(ny)]
+        return [[0.0] * nx for _ in range(ny)]
+    
+    # Sort by x
+    sorted_pts = sorted(points, key=lambda p: p['x'])
+    
+    # Build interpolated profile z(x) at mesh resolution
+    profile_z = [0.0] * nx
+    for i in range(nx):
+        x_px = i * domain_w / nx  # mesh x in meters → back to px for profile lookup
+        # Find bracketing points
+        if x_px <= sorted_pts[0]['x']:
+            z_px = sorted_pts[0]['z']
+        elif x_px >= sorted_pts[-1]['x']:
+            z_px = sorted_pts[-1]['z']
+        else:
+            # Linear interpolation
+            for k in range(len(sorted_pts) - 1):
+                if sorted_pts[k]['x'] <= x_px <= sorted_pts[k + 1]['x']:
+                    t = (x_px - sorted_pts[k]['x']) / (sorted_pts[k + 1]['x'] - sorted_pts[k]['x'])
+                    z_px = sorted_pts[k]['z'] + t * (sorted_pts[k + 1]['z'] - sorted_pts[k]['z'])
+                    break
+        # Convert px to meters
+        profile_z[i] = z_px * (domain_h / 577.0)  # Scale from px to meters using domain height
+    
+    # Build full heightfield
+    bed = [[0.0] * nx for _ in range(ny)]
+    for j in range(ny):
+        for i in range(nx):
+            h = profile_z[i]  # Base profile (varies only with x)
+            if heights_png:
+                h += heights_png[j][i] * max_depth  # Add deposition detail
+            bed[j][i] = h
+    
+    return bed
+
+
+def displace_bottom(case_dir: Path, b64_png: str, max_depth: float = 0.02,
+                    bed_profile: list = None):
+    """Read polyMesh/points, displace bottom vertices by bed heightfield.
+    
+    Args:
+        case_dir: OpenFOAM case directory (with constant/polyMesh/points)
+        b64_png: Deposition buffer as base64 PNG (can be empty string)
+        max_depth: Maximum deposition depth in meters
+        bed_profile: List of {x, z} pixel coords for user-drawn bed profile
+    """
     points_file = case_dir / "constant" / "polyMesh" / "points"
     if not points_file.exists():
         raise FileNotFoundError(f"No points file at {points_file}")
     
-    heights = decode_png_heights(b64_png)
-    in_h, in_w = len(heights), len(heights[0]) if heights else 0
+    # Decode PNG heights if provided
+    png_heights = None
+    if b64_png and len(b64_png) > 100:
+        try:
+            png_heights = decode_png_heights(b64_png)
+        except Exception:
+            pass  # Use flat if PNG decode fails
+    
+    in_h = len(png_heights) if png_heights else 0
+    in_w = len(png_heights[0]) if png_heights else 0
     
     # Read points file
     content = points_file.read_text()
     
-    # Parse the header and point list
-    # Format: header ... \nN\n(\n(x y z)\n...)\n
     header_end = content.rfind('(')
     if header_end < 0:
         raise ValueError("Cannot find point list in points file")
@@ -96,17 +158,42 @@ def displace_bottom(case_dir: Path, b64_png: str, max_depth: float = 0.02):
     ymin, ymax = min(ys), max(ys)
     zmin = min(zs)
     
+    # Number of grid cells in x and y (from the structured mesh)
+    # Approximate from the point count: sqrt of total points ≈ (nx+1)*(ny+1)
+    # For our standard 200×110 mesh: nx=200, ny=110
+    nx_mesh = 200
+    ny_mesh = 110
+    
+    # Build heightfield from profile + PNG
+    if bed_profile and len(bed_profile) >= 2:
+        heights_grid = profile_to_heights(bed_profile, nx_mesh, ny_mesh,
+                                          xmax - xmin, ymax - ymin,
+                                          max_depth, png_heights)
+    elif png_heights:
+        # PNG only, resample to mesh resolution
+        heights_grid = [[0.0] * nx_mesh for _ in range(ny_mesh)]
+        for j in range(ny_mesh):
+            for i in range(nx_mesh):
+                if in_w > 0 and in_h > 0:
+                    pi = int(i * in_w / nx_mesh)
+                    pj = int(j * in_h / ny_mesh)
+                    pi = max(0, min(in_w - 1, pi))
+                    pj = max(0, min(in_h - 1, pj))
+                    heights_grid[j][i] = png_heights[pj][pi] * max_depth
+    else:
+        heights_grid = [[0.0] * nx_mesh for _ in range(ny_mesh)]
+    
     # Displace bottom vertices (those at z ≈ zmin)
     displaced = 0
     for p in points:
         if abs(p[2] - zmin) < 1e-6:
-            # Map x,y to heightfield coordinates
-            hx = int((p[0] - xmin) / (xmax - xmin) * (in_w - 1)) if xmax > xmin else 0
-            hy = int((ymax - p[1]) / (ymax - ymin) * (in_h - 1)) if ymax > ymin else 0  # Flip Y
-            hx = max(0, min(in_w - 1, hx))
-            hy = max(0, min(in_h - 1, hy))
+            # Map x,y to mesh indices
+            mi = int((p[0] - xmin) / (xmax - xmin) * (nx_mesh - 1)) if xmax > xmin else 0
+            mj = int((p[1] - ymin) / (ymax - ymin) * (ny_mesh - 1)) if ymax > ymin else 0
+            mi = max(0, min(nx_mesh - 1, mi))
+            mj = max(0, min(ny_mesh - 1, mj))
             
-            bed_h = heights[hy][hx] * max_depth
+            bed_h = heights_grid[mj][mi]
             p[2] = zmin - bed_h  # Displace downward
             displaced += 1
     

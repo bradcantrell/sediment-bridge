@@ -64,7 +64,7 @@
     &phi;: <span class="val" id="rot">0</span>&deg;<br>
     <span class="warn" id="paused"></span>
   </div>
-  <div id="help">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
+  <div id="help">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; M bed &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
   <button id="bake-btn" onclick="bakeToOpenFOAM()">⚙ BAKE</button>
   <div id="bake-result"></div>
 
@@ -114,6 +114,25 @@ let showFlow = false;
 let showGrid = false;
 let showHelp = true;
 let simTime = 0;
+
+// Bed profile
+let bedMode = false;
+let bedPoints = [];  // [{x, z}] in pixel coords, z=0 at bottom, positive upward
+
+function bedZ(x) {
+  // Return bed elevation z at pixel x (interpolated from bedPoints)
+  // Returns 0 if no profile defined
+  if (bedPoints.length < 2) return 0;
+  if (x <= bedPoints[0].x) return bedPoints[0].z;
+  if (x >= bedPoints[bedPoints.length - 1].x) return bedPoints[bedPoints.length - 1].z;
+  for (let k = 0; k < bedPoints.length - 1; k++) {
+    if (bedPoints[k].x <= x && x <= bedPoints[k + 1].x) {
+      let t = (x - bedPoints[k].x) / (bedPoints[k + 1].x - bedPoints[k].x);
+      return bedPoints[k].z + t * (bedPoints[k + 1].z - bedPoints[k].z);
+    }
+  }
+  return 0;
+}
 
 let cellW, cellH;
 let dragging = false;
@@ -434,6 +453,20 @@ function updateParticles() {
     p.vx = vel.vx;
     p.vy = vel.vy;
 
+    // ── Bed influence (plan view: affects flow depth, no collision) ──
+    if (bedPoints.length >= 2) {
+      let bz = bedZ(p.x);  // Bed elevation at this x (z-scale, not canvas y)
+      let bedMaxZ = 160;
+      // Mass conservation: higher bed → shallower flow → faster velocity
+      // Reference depth is bedMaxZ (flat = max depth)
+      let effectiveDepth = bedMaxZ - bz;
+      if (effectiveDepth > 5 && bedMaxZ > 0) {
+        let scale = bedMaxZ / effectiveDepth;
+        p.vx *= scale;
+        p.vy *= scale;
+      }
+    }
+
     // Advect
     p.x += p.vx * DT * 4;
     p.y += p.vy * DT * 4;
@@ -647,6 +680,102 @@ function drawParticles() {
   }
 }
 
+function drawBedProfile() {
+  if (bedPoints.length < 2 && !bedMode) return;
+  
+  let stripH = 160;  // Height of the section design strip
+  let stripY = height - stripH;
+  
+  // ── Design strip background ──
+  noStroke();
+  fill(10, 12, 22, 200);
+  rect(0, stripY, width, stripH);
+  
+  // Strip border
+  stroke(60, 60, 80, 100);
+  strokeWeight(1);
+  line(0, stripY, width, stripY);
+  
+  // Label
+  noStroke();
+  fill(255, 255, 255, 50);
+  textAlign(LEFT, TOP);
+  textSize(10);
+  text('bed profile (z↑)', 8, stripY + 4);
+  
+  // ── Draw profile curve in the strip ──
+  // Map z values (0 to bedH) to strip y (stripY+stripH = bottom, stripY = top)
+  let bedMaxZ = 160;  // Max display height in px (matches stripH)
+  if (bedPoints.length >= 2) {
+    // Fill below profile in strip
+    fill(30, 28, 45, 120);
+    noStroke();
+    beginShape();
+    for (let pt of bedPoints) {
+      let sy = stripY + stripH - (pt.z / bedMaxZ) * stripH;
+      vertex(pt.x, sy);
+    }
+    vertex(bedPoints[bedPoints.length - 1].x, stripY + stripH);
+    vertex(bedPoints[0].x, stripY + stripH);
+    endShape(CLOSE);
+    
+    // Profile line in strip
+    stroke(255, 180, 60, 200);
+    strokeWeight(2);
+    noFill();
+    beginShape();
+    for (let pt of bedPoints) {
+      let sy = stripY + stripH - (pt.z / bedMaxZ) * stripH;
+      vertex(pt.x, sy);
+    }
+    endShape();
+    
+    // Control points in strip
+    for (let pt of bedPoints) {
+      let sy = stripY + stripH - (pt.z / bedMaxZ) * stripH;
+      fill(255, 180, 60, 200);
+      noStroke();
+      ellipse(pt.x, sy, 6, 6);
+    }
+    
+    // ── Draw contour lines on the main canvas (plan view) ──
+    // Contours represent z(x) extruded across all y
+    stroke(255, 180, 60, 30);
+    strokeWeight(1);
+    for (let zLevel = 20; zLevel <= bedMaxZ; zLevel += 20) {
+      beginShape();
+      for (let pt of bedPoints) {
+        if (pt.z >= zLevel) {
+          vertex(pt.x, 0);
+        } else {
+          // Find where profile crosses this z-level
+          endShape();
+          beginShape();
+        }
+      }
+      endShape();
+    }
+  }
+  
+  // ── Bed mode indicator in strip ──
+  if (bedMode && mouseX >= 0 && mouseX <= width && mouseY >= stripY) {
+    // Snap to strip for drawing
+    let mz = (stripY + stripH - mouseY) / stripH * bedMaxZ;
+    mz = max(0, min(bedMaxZ * 2, mz));
+    noStroke();
+    fill(255, 200, 100, 150);
+    ellipse(mouseX, stripY + stripH - (mz / bedMaxZ) * stripH, 8, 8);
+    
+    if (bedPoints.length > 0) {
+      let last = bedPoints[bedPoints.length - 1];
+      let lastSY = stripY + stripH - (last.z / bedMaxZ) * stripH;
+      stroke(255, 200, 100, 60);
+      strokeWeight(1);
+      line(last.x, lastSY, mouseX, stripY + stripH - (mz / bedMaxZ) * stripH);
+    }
+  }
+}
+
 function updateHUD() {
   let fmt = (n) => n.toFixed(1);
   document.getElementById('simtime').textContent = fmt(simTime);
@@ -656,6 +785,9 @@ function updateHUD() {
   document.getElementById('shape').textContent = ghostType;
   document.getElementById('rot').textContent = fmt(ghostRotation % 360);
   document.getElementById('paused').textContent = paused ? '⏸ PAUSED' : '';
+  if (bedMode) {
+    document.getElementById('paused').textContent = '🖉 BED MODE (' + bedPoints.length + ' pts)';
+  }
 
   let help = document.getElementById('help');
   help.style.opacity = showHelp ? '1' : '0';
@@ -726,6 +858,9 @@ function draw() {
   // Grid
   drawGrid();
 
+  // Bed profile (below deposition so deposits accumulate on bed surface)
+  drawBedProfile();
+
   // Deposition buffer
   image(depoBuffer, 0, 0);
 
@@ -739,7 +874,7 @@ function draw() {
   drawObstacles();
 
   // Ghost preview
-  if (!paused) drawGhost();
+  if (!paused && !bedMode) drawGhost();
 
   // HUD
   updateHUD();
@@ -754,6 +889,20 @@ function draw() {
 
 function mousePressed() {
   if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) return;
+
+  if (bedMode) {
+    // Add bed profile point in the design strip
+    let stripH = 160;
+    let stripY = height - stripH;
+    let bedMaxZ = 160;
+    // Only register clicks in the strip
+    if (mouseY >= stripY) {
+      let z = (stripY + stripH - mouseY) / stripH * bedMaxZ;
+      bedPoints.push({ x: mouseX, z: max(0, z) });
+      bedPoints.sort((a, b) => a.x - b.x);
+    }
+    return;
+  }
 
   let hit = hitTestObstacle(mouseX, mouseY);
 
@@ -813,9 +962,20 @@ function keyPressed() {
   } else if ((key === 'Backspace' || key === 'Delete') && selectedIdx >= 0) {
     deleteObstacle(selectedIdx);
     selectedIdx = -1;
+  } else if (key === 'Backspace' || key === 'Delete') {
+    // In bed mode, remove last point
+    if (bedMode && bedPoints.length > 0) {
+      bedPoints.pop();
+    }
   } else if (key === 'Escape') {
     selectedIdx = -1;
     dragging = false;
+    if (bedMode) bedMode = false;
+  } else if (key === 'm' || key === 'M') {
+    bedMode = !bedMode;
+    if (bedMode) {
+      paused = true;  // Pause sim while drawing bed
+    }
   } else if (key === 's' || key === 'S') {
     saveCanvas('sediment-' + floor(simTime), 'png');
   } else if (key === 'b' || key === 'B') {
@@ -956,7 +1116,8 @@ async function bakeToOpenFOAM() {
     inflow: INFLOW,
     width: width,
     height: height,
-    depo_png: depoBuffer.elt.toDataURL('image/png')  // Bed morphology
+    depo_png: depoBuffer.elt.toDataURL('image/png'),  // Bed morphology
+    bed_profile: bedPoints  // User-drawn bed cross-section
   };
   
   try {
