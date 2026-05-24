@@ -1159,11 +1159,12 @@ function renderComparison(ofGrid) {
 function drawComparison() {
   if (!showComparison || !comparisonData) return;
   
-  const nx = NX, ny = NY;
+  const ofNx = comparisonData.nx || 160;
+  const ofNy = comparisonData.ny || 90;
   const ofMag = comparisonData.mag;
   const ofMax = comparisonData.mag_max;
   
-  // Build Stam velocity magnitude from u[], v[]
+  // Build Stam velocity magnitude from u[], v[] (always 160×90)
   const stamMag = [];
   let stamMax = 0;
   for (let j = 1; j <= NY; j++) {
@@ -1175,8 +1176,8 @@ function drawComparison() {
     }
   }
   
-  // Shared color scale: use Stam max for consistency
-  const scaleMax = Math.max(stamMax, ofMax * 0.6); // Scale OF down since it's in m/s
+  // Shared color scale
+  const scaleMax = Math.max(stamMax, ofMax * 0.6);
   
   // Create overlay canvas
   let overlay = document.getElementById('comparison-canvas');
@@ -1196,8 +1197,12 @@ function drawComparison() {
   
   const ctx = overlay.getContext('2d');
   const halfW = Math.floor(cw / 2);
-  const cellW_c = halfW / nx;
-  const cellH_c = ch / ny;
+  
+  // Stam uses NX×NY grid, OF uses ofNx×ofNy
+  const stamCellW = halfW / NX;
+  const stamCellH = ch / NY;
+  const ofCellW = halfW / ofNx;
+  const ofCellH = ch / ofNy;
   
   function velColor(t) {
     t = Math.max(0, Math.min(1, Math.pow(t, 0.55)));
@@ -1209,22 +1214,22 @@ function drawComparison() {
     return `rgb(${Math.floor(r*255)},${Math.floor(g*255)},${Math.floor(b*255)})`;
   }
   
-  // Left: Stam
-  for (let j = 0; j < ny; j++) {
-    for (let i = 0; i < nx; i++) {
-      const t = stamMag[j * nx + i] / scaleMax;
+  // Left: Stam (NX×NY)
+  for (let j = 0; j < NY; j++) {
+    for (let i = 0; i < NX; i++) {
+      const t = stamMag[j * NX + i] / scaleMax;
       ctx.fillStyle = velColor(t);
-      ctx.fillRect(i * cellW_c, j * cellH_c, cellW_c + 0.5, cellH_c + 0.5);
+      ctx.fillRect(i * stamCellW, j * stamCellH, stamCellW + 0.5, stamCellH + 0.5);
     }
   }
   
-  // Right: OpenFOAM
-  for (let j = 0; j < ny; j++) {
-    for (let i = 0; i < nx; i++) {
-      const ofIdx = j * nx + i;
-      const t = (ofMag[ofIdx] || 0) / (scaleMax * 1.67); // Scale to Stam units
+  // Right: OpenFOAM (ofNx×ofNy)
+  for (let j = 0; j < ofNy; j++) {
+    for (let i = 0; i < ofNx; i++) {
+      const ofIdx = j * ofNx + i;
+      const t = (ofMag[ofIdx] || 0) / (scaleMax * 1.67);
       ctx.fillStyle = velColor(t);
-      ctx.fillRect(halfW + i * cellW_c, j * cellH_c, cellW_c + 0.5, cellH_c + 0.5);
+      ctx.fillRect(halfW + i * ofCellW, j * ofCellH, ofCellW + 0.5, ofCellH + 0.5);
     }
   }
   

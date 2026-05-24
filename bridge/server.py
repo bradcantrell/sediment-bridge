@@ -152,12 +152,122 @@ class JobManager:
             
             # Parse velocity field
             self._update(job_id, "parsing results", 98)
-            velocity = self._parse_velocity()
+            
+            # Run foamToVTK for cell-centered data
+            subprocess.run(
+                of_prefix + f"foamToVTK -latestTime -ascii -case {CASE_DIR}",
+                shell=True, executable='/bin/bash',
+                capture_output=True, text=True, timeout=60
+            )
+            velocity = self._parse_velocity_vtk()
             
             self._update(job_id, "complete", 100, result=velocity)
             
         except Exception as e:
             self._update(job_id, "failed", 100, error=str(e))
+
+    def _parse_velocity_vtk(self):
+        """Parse velocity from foamToVTK ASCII output with proper cell centers."""
+        import xml.etree.ElementTree as ET
+
+        vtk_dir = CASE_DIR / "VTK"
+        if not vtk_dir.exists():
+            return self._parse_velocity()
+
+        vtu_files = sorted(vtk_dir.glob("*_*_internal.vtu"))
+        if not vtu_files:
+            vtu_files = sorted(vtk_dir.glob("*/internal.vtu"))
+        if not vtu_files:
+            return self._parse_velocity()
+
+        vtu_path = vtu_files[-1]
+        tree = ET.parse(vtu_path)
+        root = tree.getroot()
+
+        piece = root.find(".//{http://www.vtk.org/VM/07082008}Piece") or root.find(".//Piece")
+        n_points = int(piece.get("NumberOfPoints", 0))
+        n_cells = int(piece.get("NumberOfCells", 0))
+
+        def parse_ascii_arr(elem, dtype=float):
+            return [dtype(x) for x in elem.text.strip().split()]
+
+        def find_da(parent, name):
+            for da in parent.iter():
+                if da.tag.endswith("DataArray") and da.get("Name") == name:
+                    return da
+            return None
+
+        # Parse points
+        pe = piece.find(".//{http://www.vtk.org/VM/07082008}Points") or piece.find(".//Points")
+        da_pts = pe.find(".//{http://www.vtk.org/VM/07082008}DataArray") or pe.find(".//DataArray")
+        pts = parse_ascii_arr(da_pts, float)
+        vertices = [(pts[i*3], pts[i*3+1]) for i in range(n_points)]
+
+        # Parse connectivity and offsets
+        cells_elem = piece.find(".//{http://www.vtk.org/VM/07082008}Cells") or piece.find(".//Cells")
+        conn_arr = find_da(cells_elem, "connectivity")
+        offs_arr = find_da(cells_elem, "offsets")
+        if conn_arr is None or offs_arr is None:
+            return self._parse_velocity()
+
+        offsets = parse_ascii_arr(offs_arr, int)
+        conn = parse_ascii_arr(conn_arr, int)
+
+        # Compute cell centers
+        centers = []
+        prev = 0
+        for off in offsets:
+            verts = conn[prev:off]
+            if verts:
+                cx = sum(vertices[v][0] for v in verts) / len(verts)
+                cy = sum(vertices[v][1] for v in verts) / len(verts)
+                centers.append((cx, cy))
+            else:
+                centers.append((0, 0))
+            prev = off
+
+        # Parse velocity from CellData
+        cd = piece.find(".//{http://www.vtk.org/VM/07082008}CellData") or piece.find(".//CellData")
+        vel_da = find_da(cd, "U")
+        if vel_da is None:
+            return self._parse_velocity()
+
+        ncomp = int(vel_da.get("NumberOfComponents", 3))
+        vals = parse_ascii_arr(vel_da, float)
+        vel = [(vals[i*3], vals[i*3+1]) for i in range(n_cells)]
+
+        if len(vel) != len(centers):
+            return self._parse_velocity()
+
+        # Interpolate to output grid using KD-tree
+        from scipy.spatial import cKDTree
+        from case_generator import DOMAIN_W, DOMAIN_H
+        STAM_NX, STAM_NY = 320, 180
+
+        positions = [(cx / DOMAIN_W, cy / DOMAIN_H) for cx, cy in centers]
+        tree = cKDTree(positions)
+
+        mag_flat = []
+        for j in range(STAM_NY):
+            for i in range(STAM_NX):
+                qx = (i + 0.5) / STAM_NX
+                qy = (STAM_NY - 1 - j + 0.5) / STAM_NY
+                dist, idx = tree.query((qx, qy), k=1)
+                ux, uy = vel[idx]
+                mag_flat.append((ux*ux + uy*uy) ** 0.5)
+
+        return {
+            "n_cells": n_cells,
+            "ux_min": min(v[0] for v in vel),
+            "ux_max": max(v[0] for v in vel),
+            "ux_mean": sum(v[0] for v in vel) / len(vel),
+            "reverse_cells": sum(1 for v in vel if v[0] < 0),
+            "grid": {
+                "nx": STAM_NX, "ny": STAM_NY,
+                "mag": mag_flat,
+                "mag_max": max(mag_flat) if mag_flat else 1.0,
+            }
+        }
 
     def _parse_velocity(self):
         """Parse U field and return velocity data on a grid matching Stam solver."""
@@ -209,27 +319,28 @@ class JobManager:
         
         # Interpolate to Stam grid (160×90) using actual cell centers
         from scipy.spatial import cKDTree
-        from cell_centers import compute_cell_centers
-        from case_generator import DOMAIN_W, DOMAIN_H
-        STAM_NX, STAM_NY = 160, 90
+        STAM_NX, STAM_NY = 320, 180  # Higher res for smoother comparison
         
-        # Get actual cell center positions from the mesh
-        cell_centers = compute_cell_centers(CASE_DIR / "constant" / "polyMesh")
+        # Try to use actual cell centers, fall back to index-based if mismatch
+        positions = None
+        try:
+            from cell_centers import compute_cell_centers
+            from case_generator import DOMAIN_W, DOMAIN_H
+            cell_centers = compute_cell_centers(CASE_DIR / "constant" / "polyMesh")
+            if len(cell_centers) == len(vals):
+                positions = [(cx / DOMAIN_W, cy / DOMAIN_H) for cx, cy in cell_centers]
+        except Exception:
+            pass
         
-        # Build KD-tree from cell centers (normalized to [0,1])
-        positions = []
-        for cx, cy in cell_centers:
-            positions.append((cx / DOMAIN_W, cy / DOMAIN_H))
-        
-        # If cell count mismatch (e.g., snappy changed cell count), 
-        # pad or truncate velocity values
-        n_vel = len(vals)
-        n_cells = len(positions)
-        if n_vel != n_cells:
-            # Truncate to smaller count
-            n = min(n_vel, n_cells)
-            vals = vals[:n]
-            positions = positions[:n]
+        if positions is None:
+            # Fallback: approximate positions from index ordering
+            n_bg = 200 * 110  # NX_BG * NY_BG
+            positions = []
+            for idx in range(len(vals)):
+                frac = idx / max(len(vals) - 1, 1)
+                i_bg = ((frac * n_bg) % 200) / 200
+                j_bg = int((frac * n_bg) / 200) % 110 / 110
+                positions.append((i_bg, j_bg))
         
         tree = cKDTree(positions)
         

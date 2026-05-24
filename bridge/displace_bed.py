@@ -133,19 +133,40 @@ def displace_bottom(case_dir: Path, b64_png: str, max_depth: float = 0.02,
     # Read points file
     content = points_file.read_text()
     
-    header_end = content.rfind('(')
-    if header_end < 0:
-        raise ValueError("Cannot find point list in points file")
+    # Find the opening parenthesis of the point list
+    # Format: ...header... \nN\n(\n(x y z)\n...)\n
+    # Find the line that is just "(" after the count
+    lines = content.split('\n')
+    open_idx = -1
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s == '(' and i > 0 and lines[i-1].strip().isdigit():
+            open_idx = i
+            break
     
-    header = content[:header_end]
-    body = content[header_end:]
+    if open_idx < 0:
+        # Fallback: find first '(' after "points" keyword
+        for i, line in enumerate(lines):
+            if line.strip() == '(':
+                open_idx = i
+                break
     
-    # Parse all points
+    if open_idx < 0:
+        raise ValueError("Cannot find opening parenthesis in points file")
+    
+    # Header = everything up to and including the opening '(' line
+    header_lines = lines[:open_idx + 1]
+    body_lines = lines[open_idx + 1:]
+    
+    # Parse all points from body
     points = []
-    for match in re.finditer(r'\(([-\d.e+\s]+)\)', body):
-        coords = [float(x) for x in match.group(1).split()]
-        if len(coords) >= 3:
-            points.append(coords)
+    for line in body_lines:
+        s = line.strip()
+        if s == ')':
+            break
+        nums = re.findall(r'[-+]?\d+\.?\d*(?:[eE][-+]?\d+)?', s)
+        if len(nums) >= 3:
+            points.append([float(nums[0]), float(nums[1]), float(nums[2])])
     
     if not points:
         raise ValueError("No points found")
@@ -200,12 +221,14 @@ def displace_bottom(case_dir: Path, b64_png: str, max_depth: float = 0.02,
     print(f"Displaced {displaced} bottom vertices (max depth: {max_depth}m)")
     
     # Rebuild points file
-    new_body = "(\n"
+    result_lines = list(header_lines)
+    # header_lines already includes the opening '(' — don't add another
     for p in points:
-        new_body += f"({p[0]:.10f} {p[1]:.10f} {p[2]:.10f})\n"
-    new_body += ")\n"
+        result_lines.append(f"({p[0]:.10f} {p[1]:.10f} {p[2]:.10f})")
+    result_lines.append(")")
+    result_lines.append("")
     
-    points_file.write_text(header + new_body)
+    points_file.write_text('\n'.join(result_lines))
 
 
 if __name__ == "__main__":
