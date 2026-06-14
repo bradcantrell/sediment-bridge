@@ -9,92 +9,163 @@
   <style>
     html, body {
       margin: 0; padding: 0; overflow: hidden;
-      background: #0a0a14; cursor: crosshair;
+      background: #080810; font-family: 'Courier New', monospace;
     }
     canvas { display: block; }
 
-    #hud {
-      position: fixed; top: 16px; left: 16px;
-      font-family: 'Courier New', monospace;
-      font-size: 12px; color: rgba(255,255,255,0.55);
-      pointer-events: none; line-height: 1.8;
-      user-select: none; z-index: 10;
+    #sidebar {
+      position: fixed; right: 0; top: 0; bottom: 0;
+      width: 270px; background: #0c0c18;
+      border-left: 1px solid rgba(255,255,255,0.06);
+      padding: 12px 10px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 5px;
+      z-index: 100; box-sizing: border-box;
     }
-    #hud .val { color: rgba(255,200,100,0.8); }
-    #hud .warn { color: rgba(255,120,80,0.8); }
-
-    #bake-btn {
-      position: fixed; top: 168px; left: 16px;
-      font-family: 'Courier New', monospace;
-      font-size: 13px; color: #fa0; background: rgba(255,255,255,0.06);
-      border: 1px solid rgba(255,200,100,0.3);
-      padding: 8px 18px; cursor: pointer; z-index: 20;
-      transition: all 0.2s;
+    #sidebar::-webkit-scrollbar { width: 3px; }
+    #sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+    #sidebar .sect-label {
+      font-size: 8px; text-transform: uppercase; letter-spacing: 1.5px;
+      color: rgba(255,255,255,0.2); padding: 4px 0 1px 0;
+      border-top: 1px solid rgba(255,255,255,0.05); margin-top: 2px;
+      display: flex; justify-content: space-between; align-items: center;
     }
-    #bake-btn:hover { background: rgba(255,200,100,0.15); border-color: #fa0; }
-    #bake-btn.baking { color: rgba(255,255,255,0.4); border-color: rgba(255,255,255,0.15); pointer-events: none; }
-
-    #bed-thumb {
-      position: fixed; top: 12px; right: 16px;
-      z-index: 15; cursor: grab;
-      border: 1px solid rgba(255,200,100,0.12);
-      border-radius: 3px;
+    #sidebar .ctrl-row {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 9px; color: rgba(255,255,255,0.4);
     }
-    #bed-thumb:active { cursor: grabbing; }
-
-    #z-scale {
-      position: fixed; top: 192px; right: 16px;
-      width: 250px; z-index: 16;
-      -webkit-appearance: none; appearance: none;
-      height: 4px; background: rgba(255,255,255,0.08);
+    #sidebar .ctrl-row label {
+      white-space: nowrap; display: flex; align-items: center; gap: 3px;
+    }
+    #sidebar .ctrl-row2 {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    #sidebar input[type="range"] {
+      flex: 1; -webkit-appearance: none; appearance: none;
+      height: 3px; background: rgba(255,255,255,0.08);
       border-radius: 2px; outline: none; cursor: ew-resize;
     }
-    #z-scale::-webkit-slider-thumb {
+    #z-scale {
+      flex: none !important;
+    }
+    #sidebar input[type="range"]::-webkit-slider-thumb {
       -webkit-appearance: none; appearance: none;
-      width: 10px; height: 10px; border-radius: 50%;
-      background: rgba(255,200,100,0.6); cursor: ew-resize;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: rgba(255,200,100,0.5); cursor: ew-resize;
+    }
+    #sidebar input[type="color"] {
+      width: 18px; height: 14px; border: none; border-radius: 2px;
+      background: none; cursor: pointer; padding: 0;
+    }
+    #sidebar .val { color: rgba(255,200,100,0.7); }
+    #sidebar .reset-btn {
+      font-size: 7px; background: none; border: 1px solid rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.2); border-radius: 2px; cursor: pointer;
+      padding: 1px 4px; transition: all 0.15s;
+    }
+    #sidebar .reset-btn:hover {
+      border-color: rgba(255,200,100,0.3); color: rgba(255,200,100,0.6);
+    }
+    #sidebar .ctrl-toggles {
+      display: flex; gap: 4px;
+    }
+    #sidebar .ctrl-toggles button {
+      flex: 1; padding: 3px 0; font-size: 9px;
+      border: 1px solid rgba(255,255,255,0.1); border-radius: 2px;
+      cursor: pointer; background: none; color: rgba(255,255,255,0.3);
+      transition: all 0.15s;
+    }
+    #sidebar .ctrl-toggles button.tg-on {
+      color: rgba(255,200,100,0.8); border-color: rgba(255,200,100,0.4);
+      background: rgba(255,200,100,0.08);
+    }
+    #sidebar .ctrl-toggles button:hover {
+      border-color: rgba(255,255,255,0.25); color: rgba(255,255,255,0.5);
+    }
+
+    #hud {
+      position: fixed; top: 12px; left: 12px; z-index: 20;
+      font-size: 11px; color: rgba(255,255,255,0.45);
+      pointer-events: none; line-height: 1.7; user-select: none;
+    }
+    .hv { color: rgba(255,200,100,0.75); }
+    .hw { color: rgba(255,120,80,0.75); }
+
+    #bake-btn {
+      font-size: 12px; color: #fa0; background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,200,100,0.25);
+      padding: 6px 14px; cursor: pointer; transition: all 0.2s;
+    }
+    #bake-btn:hover { background: rgba(255,200,100,0.12); border-color: #fa0; }
+    #bake-btn.baking { color: rgba(255,255,255,0.3); border-color: rgba(255,255,255,0.1); pointer-events: none; }
+
+    #help {
+      position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+      font-size: 10px; color: rgba(255,255,255,0.25);
+      pointer-events: none; user-select: none; z-index: 10;
+      text-align: center; transition: opacity 0.3s;
     }
 
     #bake-result {
-      position: fixed; bottom: 50px; right: 16px;
-      font-family: 'Courier New', monospace; font-size: 11px;
-      color: rgba(255,255,255,0.5); text-align: right;
-      z-index: 20; pointer-events: none; line-height: 1.6;
-      max-width: 280px;
+      font-size: 10px; color: rgba(255,255,255,0.4); line-height: 1.5;
+      pointer-events: none; max-width: 260px;
     }
     #bake-result .of-val { color: rgba(100,200,255,0.8); }
-
-    #help {
-      position: fixed; bottom: 16px; left: 50%;
-      transform: translateX(-50%);
-      font-family: 'Courier New', monospace;
-      font-size: 11px; color: rgba(255,255,255,0.35);
-      pointer-events: none; user-select: none;
-      z-index: 10; text-align: center;
-      transition: opacity 0.3s;
-    }
   </style>
 </head>
 <body>
-  <div id="hud">
-    sim-time: <span class="val" id="simtime">0.0</span>s<br>
-    mobile: <span class="val" id="mobile">3000</span>
-    deposited: <span class="val" id="deposited">0</span><br>
-    obstacles: <span class="val" id="obstacles">0</span><br>
-    shape: <span class="val" id="shape">square</span>
-    &phi;: <span class="val" id="rot">0</span>&deg;<br>
-    <span class="warn" id="paused"></span>
+<div id="sidebar">
+    <div id="sidebar-stats" style="font-size:10px;color:rgba(255,255,255,0.4);line-height:1.6;margin-bottom:4px;">
+      sim-time: <span class="hv" id="simtime">0.0</span>s &nbsp; mobile: <span class="hv" id="mobile">0</span><br>
+      deposited: <span class="hv" id="deposited">0</span> &nbsp; obstacles: <span class="hv" id="obstacles">0</span><br>
+      shape: <span class="hv" id="shape">square</span> &phi;: <span class="hv" id="rot">0</span>&deg;<br>
+      <span class="hw" id="paused"></span>
+    </div>
+    <button id="bake-btn" style="width:100%;margin-bottom:4px;" onclick="bakeToOpenFOAM()">⚙ BAKE</button>
+    <div id="bake-result" style="font-size:9px;color:rgba(255,255,255,0.35);line-height:1.4;margin-bottom:6px;max-width:100%;"></div>
+    <canvas id="bed-thumb" width="250" height="175" style="width:100%;height:auto;border:1px solid rgba(255,200,100,0.1);border-radius:3px;cursor:grab;"></canvas>
+    <div class="ctrl-row" style="justify-content:space-between;">
+      <span style="font-size:8px;color:rgba(255,255,255,0.2);">z-scale</span>
+      <span class="val" style="font-size:9px;" id="z-scale-val">0.28</span>
+    </div>
+    <input type="range" id="z-scale" min="5" max="60" value="28" step="1">
+
+    <div class="sect-label">physics <button class="reset-btn" id="reset-physics">reset</button></div>
+    <div class="ctrl-row"><label>inflow <span class="val" id="inflow-val">2.5</span></label><input type="range" id="inflow" min="0.5" max="5" value="2.5" step="0.1"></div>
+    <div class="ctrl-row"><label>settle thresh <span class="val" id="settle-thresh-val">0.20</span></label><input type="range" id="settle-thresh" min="0.05" max="0.8" value="0.20" step="0.01"></div>
+    <div class="ctrl-row"><label>settle prob <span class="val" id="settle-prob-val">0.012</span></label><input type="range" id="settle-prob" min="0.002" max="0.08" value="0.012" step="0.001"></div>
+    <div class="ctrl-row"><label>erode thresh <span class="val" id="erosion-thresh-val">0.50</span></label><input type="range" id="erosion-thresh" min="0.1" max="1.2" value="0.50" step="0.01"></div>
+    <div class="ctrl-row"><label>erode prob <span class="val" id="erosion-prob-val">0.06</span></label><input type="range" id="erosion-prob" min="0.01" max="0.2" value="0.06" step="0.005"></div>
+
+    <div class="sect-label">render <button class="reset-btn" id="reset-render">reset</button></div>
+    <div class="ctrl-row"><label>trail fade <span class="val" id="trail-fade-val">7</span></label><input type="range" id="trail-fade" min="2" max="40" value="7" step="1"></div>
+    <div class="ctrl-row"><label>size <span class="val" id="particle-size-val">2</span></label><input type="range" id="particle-size" min="1" max="8" value="2" step="0.5"></div>
+    <div class="ctrl-row2">
+      <label style="font-size:9px;color:rgba(255,255,255,0.4);">slow <input type="color" id="slow-color" value="#ff44aa"></label>
+      <label style="font-size:9px;color:rgba(255,255,255,0.4);">fast <input type="color" id="fast-color" value="#ddeeff"></label>
+    </div>
+    <div class="ctrl-row"><label>color thresh <span class="val" id="color-thresh-val">0.5</span></label><input type="range" id="color-thresh" min="0.1" max="1.5" value="0.5" step="0.05"></div>
+    <div class="ctrl-row"><label>flow scale <span class="val" id="flow-scale-val">25</span></label><input type="range" id="flow-scale" min="5" max="60" value="25" step="1"></div>
+    <div class="ctrl-row"><label>flow dens <span class="val" id="flow-dens-val">8</span></label><input type="range" id="flow-dens" min="3" max="20" value="8" step="1"></div>
+    <div class="ctrl-row"><label>flow opacity <span class="val" id="flow-opacity-val">140</span></label><input type="range" id="flow-opacity" min="20" max="255" value="140" step="5"></div>
+    <div class="ctrl-row"><label>particles <span class="val" id="particle-count-val">3000</span></label><input type="range" id="particle-count" min="500" max="8000" value="3000" step="100"></div>
+
+    <div class="sect-label">toggles</div>
+    <div class="ctrl-toggles">
+      <button id="toggle-grid" class="tg-off">grid</button>
+      <button id="toggle-flow" class="tg-off">flow</button>
+      <button id="toggle-bed" class="tg-off">bed</button>
+      <button id="toggle-pause" class="tg-off">pause</button>
+    </div>
   </div>
-  <button id="bake-btn" onclick="bakeToOpenFOAM()">⚙ BAKE</button>
-  <canvas id="bed-thumb" width="250" height="175"></canvas>
-  <input type="range" id="z-scale" min="5" max="60" value="28" step="1" title="z scale">
-  <div id="help">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; M bed &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
-  <div id="bake-result"></div>
+</div>
+
+<div id="help" style="position:fixed;bottom:8px;left:50%;transform:translateX(-50%);font-size:10px;color:rgba(255,255,255,0.2);pointer-events:none;z-index:5;text-align:center;">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; M bed &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
 
 <script>
 // ─────────────────────────────────────────────
 // CONFIGURATION
 // ─────────────────────────────────────────────
+const SIDEBAR_W = 270;
 const NX = 160;
 const NY = 90;
 const SIZE = (NX + 2) * (NY + 2);
@@ -102,15 +173,16 @@ const IX = (i, j) => i + j * (NX + 2);
 
 const DT = 0.08;
 const VISC = 0.00005;
-const INFLOW = 2.5;
-const N_PARTICLES = 3000;
-const SETTLE_THRESH = 0.20;
-const EROSION_THRESH = 0.50;
-const SETTLE_PROB = 0.012;
-const EROSION_PROB = 0.06;
-const MIN_PARTICLE_AGE = 0.8; // Seconds before particle can settle
-const MIN_TRAVEL_X = 100;    // px — absolute no-settlement injection zone
+const MIN_PARTICLE_AGE = 0.8;
+const MIN_TRAVEL_X = 100;
 const GAUSS_SEIDEL_ITERS = 30;
+
+// Tunable simulation parameters
+let inflowVel = 2.5;
+let settleThresh = 0.20;
+let erosionThresh = 0.50;
+let settleProb = 0.012;
+let erosionProb = 0.06;
 
 // ─────────────────────────────────────────────
 // GLOBAL STATE
@@ -130,8 +202,9 @@ let particles = [];
 let deposited = [];
 
 let depoBuffer;
-let bedSurface;    // Rendered bed topography overlay
-let bedThumb;      // Isometric thumbnail canvas context
+let bedSurface;
+let bedThumb;
+let trailBuffer;
 let gridLayer;
 
 let paused = false;
@@ -142,111 +215,97 @@ let simTime = 0;
 
 // Bed profile
 let bedMode = false;
-let bedPoints = [];  // [{x, z}] in pixel coords, z=0 at bottom, positive upward
-let bedXSections = [];  // [{x, points: [{y, z}]}] — cross-section profiles at each station
-let activeXSection = -1;  // Index of cross-section being edited, or -1
+let bedPoints = [];
+let bedXSections = [];
+let activeXSection = -1;
+
+// Bed point editing state
+let editingLongPt = -1;
+let editingXSStation = null;
 
 // Thumbnail rotation state
-let thumbAngleX = 30;   // Degrees — rotation around vertical (spine direction spread)
-let thumbAngleY = 30;   // Degrees — elevation angle
+let thumbAngleX = 30;
+let thumbAngleY = 30;
 let thumbDragging = false;
 let thumbDragLast = { x: 0, y: 0 };
 
-function getStationZ(station, y) {
-  // Return absolute bed elevation at a station for a given canvas y
-  // Uses the station's cross-section profile (bedXSections) if available
-  let xsData = bedXSections.find(xs => xs.x === station.x);
-  if (!xsData || xsData.points.length < 2) return station.z; // No transverse data → flat extrusion
-
-  let pts = [...xsData.points].sort((a, b) => a.y - b.y);
-  if (y <= pts[0].y) return station.z + pts[0].z;
-  if (y >= pts[pts.length - 1].y) return station.z + pts[pts.length - 1].z;
-
-  for (let k = 0; k < pts.length - 1; k++) {
-    if (pts[k].y <= y && y <= pts[k + 1].y) {
-      let t = (y - pts[k].y) / (pts[k + 1].y - pts[k].y);
-      let relZ = pts[k].z + t * (pts[k + 1].z - pts[k].z);
-      return station.z + relZ;
-    }
-  }
-  return station.z;
-}
-
-function bedZ(x, y) {
-  // Return bed elevation z at canvas position (x, y)
-  // Interpolates: longitudinal (bedPoints) × transverse (bedXSections)
-  // Returns 0 if no profile defined
-  if (bedPoints.length < 2) return 0;
-
-  if (x <= bedPoints[0].x) return getStationZ(bedPoints[0], y);
-  if (x >= bedPoints[bedPoints.length - 1].x) return getStationZ(bedPoints[bedPoints.length - 1], y);
-
-  for (let k = 0; k < bedPoints.length - 1; k++) {
-    if (bedPoints[k].x <= x && x <= bedPoints[k + 1].x) {
-      let t = (x - bedPoints[k].x) / (bedPoints[k + 1].x - bedPoints[k].x);
-      let zA = getStationZ(bedPoints[k], y);
-      let zB = getStationZ(bedPoints[k + 1], y);
-      return zA + t * (zB - zA);
-    }
-  }
-  return 0;
-}
+// Particle rendering controls
+let trailFade = 7;
+let particleSize = 2;
+let slowColor = '#ff44aa';
+let fastColor = '#ddeeff';
+let flowScale = 25;
+let flowDensity = 8;
+let flowOpacity = 140;
+let colorThresh = 0.5;
+let particleCount = 3000;
 
 let cellW, cellH;
 let dragging = false;
 let dragOffX, dragOffY;
 
 // ─────────────────────────────────────────────
-// FLUID SOLVER (Jos Stam, adapted with obstacles)
+// BED FUNCTIONS
 // ─────────────────────────────────────────────
+function getStationZ(station, y) {
+  let xsData = bedXSections.find(xs => xs.x === station.x);
+  if (!xsData || xsData.points.length < 2) return station.z;
+  let pts = [...xsData.points].sort((a, b) => a.y - b.y);
+  if (y <= pts[0].y) return station.z + pts[0].z;
+  if (y >= pts[pts.length - 1].y) return station.z + pts[pts.length - 1].z;
+  for (let k = 0; k < pts.length - 1; k++) {
+    if (pts[k].y <= y && y <= pts[k + 1].y) {
+      let t = (y - pts[k].y) / (pts[k + 1].y - pts[k].y);
+      return station.z + pts[k].z + t * (pts[k + 1].z - pts[k].z);
+    }
+  }
+  return station.z;
+}
 
+function bedZ(x, y) {
+  if (bedPoints.length < 2) return 0;
+  if (x <= bedPoints[0].x) return getStationZ(bedPoints[0], y);
+  if (x >= bedPoints[bedPoints.length - 1].x) return getStationZ(bedPoints[bedPoints.length - 1], y);
+  for (let k = 0; k < bedPoints.length - 1; k++) {
+    if (bedPoints[k].x <= x && x <= bedPoints[k + 1].x) {
+      let t = (x - bedPoints[k].x) / (bedPoints[k + 1].x - bedPoints[k].x);
+      return getStationZ(bedPoints[k], y) + t * (getStationZ(bedPoints[k + 1], y) - getStationZ(bedPoints[k], y));
+    }
+  }
+  return 0;
+}
+
+// ─────────────────────────────────────────────
+// FLUID SOLVER (Jos Stam, adapted)
+// ─────────────────────────────────────────────
 function addSource(x, s) {
-  for (let j = 1; j <= NY; j++) {
+  for (let j = 1; j <= NY; j++)
     for (let i = 1; i <= NX; i++) {
       let idx = IX(i, j);
       if (solid[idx]) continue;
       x[idx] += DT * s[idx];
     }
-  }
 }
 
 function buildSolidMask() {
   solid.fill(0);
   for (let ob of obstacles) {
     if (simTime < ob.appearsAt || simTime > ob.disappearsAt) continue;
-    // Convert obstacle pixel coords to grid coords
-    let cx = ob.x / cellW;
-    let cy = ob.y / cellH;
-    let r = ob.size / 2;
-    let rg = r / ((cellW + cellH) / 2); // radius in grid cells
-
-    // Bounding box in grid coords
-    let i0 = max(1, floor(cx - rg - 1));
-    let i1 = min(NX, ceil(cx + rg + 1));
-    let j0 = max(1, floor(cy - rg - 1));
-    let j1 = min(NY, ceil(cy + rg + 1));
-
+    let cx = ob.x / cellW, cy = ob.y / cellH, r = ob.size / 2;
+    let rg = r / ((cellW + cellH) / 2);
+    let i0 = max(1, floor(cx - rg - 1)), i1 = min(NX, ceil(cx + rg + 1));
+    let j0 = max(1, floor(cy - rg - 1)), j1 = min(NY, ceil(cy + rg + 1));
     for (let j = j0; j <= j1; j++) {
       for (let i = i0; i <= i1; i++) {
         let idx = IX(i, j);
         if (solid[idx]) continue;
-
-        let px = i - cx;
-        let py = j - cy;
-
+        let px = i - cx, py = j - cy;
         if (ob.type === 'circle') {
-          if (px * px + py * py <= rg * rg) {
-            solid[idx] = 1;
-          }
+          if (px * px + py * py <= rg * rg) solid[idx] = 1;
         } else {
-          // Rotated square
-          let cosA = cos(-ob.rotation * PI / 180);
-          let sinA = sin(-ob.rotation * PI / 180);
-          let rx = px * cosA - py * sinA;
-          let ry = px * sinA + py * cosA;
-          if (abs(rx) <= rg && abs(ry) <= rg) {
-            solid[idx] = 1;
-          }
+          let cosA = cos(-ob.rotation * PI / 180), sinA = sin(-ob.rotation * PI / 180);
+          let rx = px * cosA - py * sinA, ry = px * sinA + py * cosA;
+          if (abs(rx) <= rg && abs(ry) <= rg) solid[idx] = 1;
         }
       }
     }
@@ -254,24 +313,16 @@ function buildSolidMask() {
 }
 
 function setBnd(b, x) {
-  // Left boundary: no-slip for u (b=1), zero-gradient for others
-  for (let j = 1; j <= NY; j++) {
-    x[IX(0, j)] = b === 1 ? -x[IX(1, j)] : x[IX(1, j)];
-  }
-  // Right boundary: outflow (zero-gradient for all fields)
-  for (let j = 1; j <= NY; j++) {
-    x[IX(NX+1, j)] = x[IX(NX, j)];
-  }
-  // Top and bottom: free-slip (u: zero-gradient, v: no-through, p: zero-gradient)
+  for (let j = 1; j <= NY; j++) { x[IX(0, j)] = b === 1 ? -x[IX(1, j)] : x[IX(1, j)]; }
+  for (let j = 1; j <= NY; j++) { x[IX(NX+1, j)] = x[IX(NX, j)]; }
   for (let i = 1; i <= NX; i++) {
-    x[IX(i, 0)]    = b === 2 ? -x[IX(i, 1)] : x[IX(i, 1)];
+    x[IX(i, 0)] = b === 2 ? -x[IX(i, 1)] : x[IX(i, 1)];
     x[IX(i, NY+1)] = b === 2 ? -x[IX(i, NY)] : x[IX(i, NY)];
   }
-  // Corner averages
-  x[IX(0, 0)]         = 0.5 * (x[IX(1, 0)] + x[IX(0, 1)]);
-  x[IX(0, NY+1)]      = 0.5 * (x[IX(1, NY+1)] + x[IX(0, NY)]);
-  x[IX(NX+1, 0)]      = 0.5 * (x[IX(NX, 0)] + x[IX(NX+1, 1)]);
-  x[IX(NX+1, NY+1)]   = 0.5 * (x[IX(NX, NY+1)] + x[IX(NX+1, NY)]);
+  x[IX(0, 0)] = 0.5 * (x[IX(1, 0)] + x[IX(0, 1)]);
+  x[IX(0, NY+1)] = 0.5 * (x[IX(1, NY+1)] + x[IX(0, NY)]);
+  x[IX(NX+1, 0)] = 0.5 * (x[IX(NX, 0)] + x[IX(NX+1, 1)]);
+  x[IX(NX+1, NY+1)] = 0.5 * (x[IX(NX, NY+1)] + x[IX(NX+1, NY)]);
 }
 
 function linSolve(b, x, x0, a, c) {
@@ -280,10 +331,10 @@ function linSolve(b, x, x0, a, c) {
       for (let i = 1; i <= NX; i++) {
         let idx = IX(i, j);
         if (solid[idx]) continue;
-        let left   = solid[IX(i-1, j)]   ? x[idx] : x[IX(i-1, j)];
-        let right  = solid[IX(i+1, j)]   ? x[idx] : x[IX(i+1, j)];
-        let bottom = solid[IX(i, j-1)]   ? x[idx] : x[IX(i, j-1)];
-        let top    = solid[IX(i, j+1)]   ? x[idx] : x[IX(i, j+1)];
+        let left = solid[IX(i-1, j)] ? x[idx] : x[IX(i-1, j)];
+        let right = solid[IX(i+1, j)] ? x[idx] : x[IX(i+1, j)];
+        let bottom = solid[IX(i, j-1)] ? x[idx] : x[IX(i, j-1)];
+        let top = solid[IX(i, j+1)] ? x[idx] : x[IX(i, j+1)];
         x[idx] = (x0[idx] + a * (left + right + bottom + top)) / c;
       }
     }
@@ -291,10 +342,7 @@ function linSolve(b, x, x0, a, c) {
   }
 }
 
-function diffuse(b, x, x0, diff) {
-  let a = DT * diff * NX * NY;
-  linSolve(b, x, x0, a, 1 + 4 * a);
-}
+function diffuse(b, x, x0, diff) { let a = DT * diff * NX * NY; linSolve(b, x, x0, a, 1 + 4 * a); }
 
 function advect(b, d, d0, uVec, vVec) {
   let dt0 = DT * NX;
@@ -302,1505 +350,798 @@ function advect(b, d, d0, uVec, vVec) {
     for (let i = 1; i <= NX; i++) {
       let idx = IX(i, j);
       if (solid[idx]) { d[idx] = 0; continue; }
-
-      let x = i - dt0 * uVec[idx];
-      let y = j - dt0 * vVec[idx];
-
-      // Clamp to grid
-      x = constrain(x, 0.5, NX + 0.5);
-      y = constrain(y, 0.5, NY + 0.5);
-
-      let i0 = floor(x), i1 = i0 + 1;
-      let j0 = floor(y), j1 = j0 + 1;
-
-      // If backtrace lands in solid, fall back to current cell
-      if (solid[IX(i0, j0)] || solid[IX(i1, j0)] || solid[IX(i0, j1)] || solid[IX(i1, j1)]) {
-        d[idx] = d0[idx];
-        continue;
-      }
-
-      let sx = x - i0;
-      let sy = y - j0;
-      d[idx] = (1 - sx) * (1 - sy) * d0[IX(i0, j0)]
-             + sx       * (1 - sy) * d0[IX(i1, j0)]
-             + (1 - sx) * sy       * d0[IX(i0, j1)]
-             + sx       * sy       * d0[IX(i1, j1)];
+      let x = i - dt0 * uVec[idx], y = j - dt0 * vVec[idx];
+      x = constrain(x, 0.5, NX + 0.5); y = constrain(y, 0.5, NY + 0.5);
+      let i0 = floor(x), i1 = i0 + 1, j0 = floor(y), j1 = j0 + 1;
+      if (solid[IX(i0, j0)] || solid[IX(i1, j0)] || solid[IX(i0, j1)] || solid[IX(i1, j1)]) { d[idx] = d0[idx]; continue; }
+      let sx = x - i0, sy = y - j0;
+      d[idx] = (1-sx)*(1-sy)*d0[IX(i0,j0)] + sx*(1-sy)*d0[IX(i1,j0)] + (1-sx)*sy*d0[IX(i0,j1)] + sx*sy*d0[IX(i1,j1)];
     }
   }
   setBnd(b, d);
 }
 
 function project(uVec, vVec, pArr, divArr) {
-  // Compute divergence
   for (let j = 1; j <= NY; j++) {
     for (let i = 1; i <= NX; i++) {
       let idx = IX(i, j);
       if (solid[idx]) { divArr[idx] = 0; pArr[idx] = 0; continue; }
-      let uR = solid[IX(i+1, j)] ? 0 : uVec[IX(i+1, j)];
-      let uL = solid[IX(i-1, j)] ? 0 : uVec[idx];
-      let vT = solid[IX(i, j+1)] ? 0 : vVec[IX(i, j+1)];
-      let vB = solid[IX(i, j-1)] ? 0 : vVec[idx];
-      divArr[idx] = -0.5 * (uR - uL + vT - vB);
-      pArr[idx] = 0;
+      let uR = solid[IX(i+1, j)] ? 0 : uVec[IX(i+1, j)], uL = solid[IX(i-1, j)] ? 0 : uVec[idx];
+      let vT = solid[IX(i, j+1)] ? 0 : vVec[IX(i, j+1)], vB = solid[IX(i, j-1)] ? 0 : vVec[idx];
+      divArr[idx] = -0.5 * (uR - uL + vT - vB); pArr[idx] = 0;
     }
   }
-  setBnd(0, divArr);
-  setBnd(0, pArr);
-
-  // Solve pressure (Neumann BC: b=0)
+  setBnd(0, divArr); setBnd(0, pArr);
   linSolve(0, pArr, divArr, 1, 4);
-
-  // Subtract pressure gradient
-  for (let j = 1; j <= NY; j++) {
+  for (let j = 1; j <= NY; j++)
     for (let i = 1; i <= NX; i++) {
       let idx = IX(i, j);
-      if (solid[idx]) { uVec[idx] = 0; vVec[idx] = 0; continue; }
-      let pR = solid[IX(i+1, j)] ? pArr[idx] : pArr[IX(i+1, j)];
-      let pL = solid[IX(i-1, j)] ? pArr[idx] : pArr[IX(i-1, j)];
-      let pT = solid[IX(i, j+1)] ? pArr[idx] : pArr[IX(i, j+1)];
-      let pB = solid[IX(i, j-1)] ? pArr[idx] : pArr[IX(i, j-1)];
-      uVec[idx] -= 0.5 * (pR - pL);
-      vVec[idx] -= 0.5 * (pT - pB);
+      if (solid[idx]) continue;
+      let uR = solid[IX(i+1, j)] ? 0 : uVec[IX(i+1, j)], uL = solid[IX(i-1, j)] ? 0 : uVec[idx];
+      let vT = solid[IX(i, j+1)] ? 0 : vVec[IX(i, j+1)], vB = solid[IX(i, j-1)] ? 0 : vVec[idx];
+      uVec[idx] -= 0.5 * (pArr[IX(i+1, j)] - pArr[IX(i-1, j)]);
+      vVec[idx] -= 0.5 * (pArr[IX(i, j+1)] - pArr[IX(i, j-1)]);
     }
-  }
-  setBnd(1, uVec);
-  setBnd(2, vVec);
+  setBnd(1, uVec); setBnd(2, vVec);
 }
 
 function velocityStep() {
-  // Use uPrev/vPrev as scratch for source + diffusion
-  uPrev.fill(0);
-  vPrev.fill(0);
-
-  // Swap and diffuse
-  [u, uPrev] = [uPrev, u];
-  diffuse(1, u, uPrev, VISC);
-  [v, vPrev] = [vPrev, v];
-  diffuse(2, v, vPrev, VISC);
-
-  project(u, v, uPrev, vPrev);
-
-  [u, uPrev] = [uPrev, u];
-  [v, vPrev] = [vPrev, v];
-  advect(1, u, uPrev, uPrev, vPrev);
-  advect(2, v, vPrev, uPrev, vPrev);
-
-  project(u, v, uPrev, vPrev);
-
-  // ── Dirichlet inflow BC: clamp left edge u to INFLOW ──
+  // Dirichlet inflow
   for (let j = 1; j <= NY; j++) {
     let idx = IX(1, j);
     if (!solid[idx]) {
       let noiseVal = (noise(j * 0.15, simTime * 0.3) - 0.5) * 0.3;
-      u[idx] = INFLOW + noiseVal;
+      u[idx] = inflowVel + noiseVal;
     }
   }
-
-  // Zero out solid cells (belt and suspenders)
-  for (let i = 0; i < SIZE; i++) {
-    if (solid[i]) { u[i] = 0; v[i] = 0; }
-  }
+  diffuse(1, uPrev, u, VISC);
+  project(uPrev, vPrev, p, divArr);
+  advect(1, u, uPrev, uPrev, vPrev);
+  advect(2, v, vPrev, uPrev, vPrev);
+  project(u, v, p, divArr);
 }
 
 // ─────────────────────────────────────────────
-// OBSTACLE MANAGEMENT
+// PARTICLES
 // ─────────────────────────────────────────────
-
-function addObstacle(x, y, type, rotation) {
-  obstacles.push({
-    type: type,
-    x: x,
-    y: y,
-    size: ghostSize,
-    rotation: rotation || 0,
-    appearsAt: simTime,
-    disappearsAt: Infinity
-  });
-  selectedIdx = obstacles.length - 1;
-}
-
-function deleteObstacle(idx) {
-  if (idx >= 0 && idx < obstacles.length) {
-    obstacles.splice(idx, 1);
-    if (selectedIdx >= obstacles.length) selectedIdx = obstacles.length - 1;
-    if (obstacles.length === 0) selectedIdx = -1;
-  }
-}
-
-function hitTestObstacle(mx, my) {
-  for (let i = obstacles.length - 1; i >= 0; i--) {
-    let ob = obstacles[i];
-    if (simTime < ob.appearsAt || simTime > ob.disappearsAt) continue;
-    let dx = mx - ob.x, dy = my - ob.y;
-
-    if (ob.type === 'circle') {
-      if (dx * dx + dy * dy <= (ob.size / 2) * (ob.size / 2)) return i;
-    } else {
-      let cosA = cos(-ob.rotation * PI / 180);
-      let sinA = sin(-ob.rotation * PI / 180);
-      let rx = dx * cosA - dy * sinA;
-      let ry = dx * sinA + dy * cosA;
-      let half = ob.size / 2;
-      if (abs(rx) <= half && abs(ry) <= half) return i;
-    }
-  }
-  return -1;
-}
-
-// ─────────────────────────────────────────────
-// SEDIMENT PARTICLES
-// ─────────────────────────────────────────────
-
 function getVelocityAt(px, py) {
-  // Bilinear interpolation of velocity field at pixel coordinates
-  let gx = px / cellW;
-  let gy = py / cellH;
-  gx = constrain(gx, 1.0, NX);  // Keep inside interior domain
-  gy = constrain(gy, 1.0, NY);
-
-  let i0 = floor(gx), i1 = i0 + 1;
-  let j0 = floor(gy), j1 = j0 + 1;
-  let sx = gx - i0, sy = gy - j0;
-
-  // Clamp indices to interior to avoid boundary cells
-  i0 = constrain(i0, 1, NX); i1 = constrain(i1, 1, NX);
-  j0 = constrain(j0, 1, NY); j1 = constrain(j1, 1, NY);
-
-  let idx00 = IX(i0, j0), idx10 = IX(i1, j0);
-  let idx01 = IX(i0, j1), idx11 = IX(i1, j1);
-
-  if (solid[idx00] || solid[idx10] || solid[idx01] || solid[idx11]) {
-    return { vx: 0, vy: 0 };
-  }
-
-  let vx = (1 - sx) * (1 - sy) * u[idx00] + sx * (1 - sy) * u[idx10]
-         + (1 - sx) * sy * u[idx01] + sx * sy * u[idx11];
-  let vy = (1 - sx) * (1 - sy) * v[idx00] + sx * (1 - sy) * v[idx10]
-         + (1 - sx) * sy * v[idx01] + sx * sy * v[idx11];
-
-  return { vx: vx * cellW, vy: vy * cellH };
+  let i = constrain(floor(px / cellW), 0, NX+1);
+  let j = constrain(floor(py / cellH), 0, NY+1);
+  let idx = IX(i, j);
+  return { vx: solid[idx] ? 0 : u[idx] * cellW, vy: solid[idx] ? 0 : v[idx] * cellH };
 }
 
 function isInsideObstacle(px, py) {
-  return hitTestObstacle(px, py) >= 0;
+  for (let ob of obstacles) {
+    if (simTime < ob.appearsAt || simTime > ob.disappearsAt) continue;
+    let dx = px - ob.x, dy = py - ob.y;
+    if (ob.type === 'circle') {
+      if (dx*dx + dy*dy <= (ob.size/2)*(ob.size/2)) return true;
+    } else {
+      let cosA = cos(-ob.rotation * PI / 180), sinA = sin(-ob.rotation * PI / 180);
+      let rx = dx * cosA - dy * sinA, ry = dx * sinA + dy * cosA;
+      let h = ob.size / 2;
+      if (abs(rx) <= h && abs(ry) <= h) return true;
+    }
+  }
+  return false;
 }
 
 function spawnParticle() {
-  return {
-    x: random(cellW, cellW * 3),  // Spawn inside first few cells
-    y: random(cellH, height - cellH),
-    vx: random(INFLOW * 0.5, INFLOW * 1.2) * cellW,
-    vy: random(-0.3, 0.3) * cellH,
-    born: simTime
-  };
+  let x = random(cellW, cellW * 3), y = random(cellH, height - cellH);
+  return { x, y, vx: random(inflowVel*0.5, inflowVel*1.2) * cellW, vy: random(-0.3,0.3)*cellH, born: simTime };
 }
 
 function initParticles() {
-  particles = [];
-  deposited = [];
-  for (let i = 0; i < N_PARTICLES; i++) {
-    particles.push(spawnParticle());
-  }
+  particles = []; deposited = [];
+  for (let i = 0; i < particleCount; i++) particles.push(spawnParticle());
 }
 
 function updateParticles() {
-  // Mobile particles
   for (let i = particles.length - 1; i >= 0; i--) {
     let p = particles[i];
     let vel = getVelocityAt(p.x, p.y);
-    p.vx = vel.vx;
-    p.vy = vel.vy;
+    p.vx = vel.vx; p.vy = vel.vy;
 
-    // ── Bed influence: channel containment + proximity settling ──
-    // The bed defines a channel. Particles outside it get pushed back in.
-    // Within the channel, settling increases on higher bed (shallower flow).
     let bedHere = 0;
     if (bedPoints.length >= 2) {
-      bedHere = bedZ(p.x, p.y);  // 2D bed elevation at particle position
-
-      // Containment: if particle is outside bed area (z near 0), push toward channel
-      let bedMinZ = 5;  // Threshold — below this, particle is "out of channel"
-      if (bedHere < bedMinZ) {
-        // Sample bed gradient to find direction toward channel
-        let bedAbove = bedZ(p.x, max(0, p.y - 4));
-        let bedBelow = bedZ(p.x, min(height, p.y + 4));
-        // Push toward higher bed elevation
-        if (bedAbove > bedBelow) {
-          p.vy -= cellH * 0.8;
-        } else if (bedBelow > bedAbove) {
-          p.vy += cellH * 0.8;
-        }
-        // Also sample x-gradient
-        let bedLeft = bedZ(max(0, p.x - 4), p.y);
-        let bedRight = bedZ(min(width, p.x + 4), p.y);
-        if (bedLeft > bedRight) {
-          p.vx -= cellW * 0.3;
-        } else if (bedRight > bedLeft) {
-          p.vx += cellW * 0.3;
-        }
+      bedHere = bedZ(p.x, p.y);
+      if (bedHere < 5) {
+        let bedAbove = bedZ(p.x, max(0, p.y - 4)), bedBelow = bedZ(p.x, min(height, p.y + 4));
+        if (bedAbove > bedBelow) p.vy -= cellH * 0.8;
+        else if (bedBelow > bedAbove) p.vy += cellH * 0.8;
+        let bedLeft = bedZ(max(0, p.x - 4), p.y), bedRight = bedZ(min(width, p.x + 4), p.y);
+        if (bedLeft > bedRight) p.vx -= cellW * 0.3;
+        else if (bedRight > bedLeft) p.vx += cellW * 0.3;
       }
     }
 
-    // Advect
     p.x += p.vx * DT * 4;
     p.y += p.vy * DT * 4;
+    p.x += (noise(p.x*0.01, p.y*0.01, simTime) - 0.5) * 2;
+    p.y += (noise(p.x*0.01+100, p.y*0.01, simTime) - 0.5) * 2;
 
-    // Random jitter (sub-grid diffusion)
-    p.x += (noise(p.x * 0.01, p.y * 0.01, simTime) - 0.5) * 2;
-    p.y += (noise(p.x * 0.01 + 100, p.y * 0.01, simTime) - 0.5) * 2;
+    if (p.x < 0 || p.x > width || p.y < 0 || p.y > height) { particles.splice(i,1); continue; }
+    if (isInsideObstacle(p.x, p.y)) { p.x += random(-5,5); p.y += random(-5,5); }
 
-    // ── Edges are a viewport: particles exit → die ──
-    if (p.x < 0 || p.x > width || p.y < 0 || p.y > height) {
-      particles.splice(i, 1);
-      continue;
-    }
-
-    // Inside obstacle? Bounce out
-    if (isInsideObstacle(p.x, p.y)) {
-      p.x += random(-5, 5);
-      p.y += random(-5, 5);
-    }
-
-    let speed = mag(p.vx, p.vy) / ((cellW + cellH) / 2);
-
-    // Settle — only if particle has existed long enough AND cleared the injection zone
-    // Bed proximity: higher bed elevation → higher settle probability (shallower = more deposition)
-    let age = simTime - (p.born || 0);
-    let bedSettleBoost = bedHere > 0 ? 1.0 + (bedHere / 160) * 4.0 : 1.0;  // Up to 5× at max bed height
-    if (p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE && speed < SETTLE_THRESH && random() < SETTLE_PROB * bedSettleBoost) {
+    let speed = mag(p.vx, p.vy) / ((cellW+cellH)/2);
+    let age = simTime - (p.born||0);
+    let bedSettleBoost = bedHere > 0 ? 1.0 + (bedHere/160)*4.0 : 1.0;
+    if (p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE && speed < settleThresh && random() < settleProb * bedSettleBoost) {
       deposited.push({ x: p.x, y: p.y, z: bedHere });
       particles.splice(i, 1);
     }
   }
 
-  // Deposited particles: check for erosion
   for (let i = deposited.length - 1; i >= 0; i--) {
     let d = deposited[i];
     let vel = getVelocityAt(d.x, d.y);
-    let speed = mag(vel.vx, vel.vy) / ((cellW + cellH) / 2);
-
-    if (speed > EROSION_THRESH && random() < EROSION_PROB) {
-      // Erode less on higher bed (deposits are more stable in shallows)
+    let speed = mag(vel.vx, vel.vy) / ((cellW+cellH)/2);
+    if (speed > erosionThresh && random() < erosionProb) {
       let bedHere2 = bedPoints.length >= 2 ? bedZ(d.x, d.y) : 0;
-      let erosionResist = bedHere2 > 0 ? 1.0 / (1.0 + (bedHere2 / 160) * 2.0) : 1.0;  // Down to ~0.33× at max bed
-      if (random() > erosionResist) continue;  // Skip erosion due to bed stability
-      // Erode: draw dark spot, reactivate
-      depoBuffer.noStroke();
-      depoBuffer.fill(10, 10, 20, 80);
-      depoBuffer.ellipse(d.x, d.y, 8, 8);
-      particles.push({
-        x: d.x + random(-3, 3),
-        y: d.y + random(-3, 3),
-        vx: vel.vx + random(-0.5, 0.5),
-        vy: vel.vy + random(-0.5, 0.5),
-        born: simTime  // Reset age on re-entrainment
-      });
+      let resist = bedHere2 > 0 ? 1.0/(1.0 + (bedHere2/160)*2.0) : 1.0;
+      if (random() > resist) continue;
+      depoBuffer.noStroke(); depoBuffer.fill(10,10,20,80); depoBuffer.ellipse(d.x,d.y,8,8);
+      particles.push({ x: d.x+random(-3,3), y: d.y+random(-3,3), vx: vel.vx+random(-0.5,0.5), vy: vel.vy+random(-0.5,0.5), born: simTime });
       deposited.splice(i, 1);
     }
   }
 
-  // Respawn missing particles at inflow
-  while (particles.length + deposited.length < N_PARTICLES) {
-    let spawnX = random(cellW, cellW * 3);
-    let spawnY;
-
-    // If bed defined, spawn within the channel at this x
+  while (particles.length + deposited.length < particleCount) {
+    let spawnX = random(cellW, cellW*3), spawnY;
     if (bedPoints.length >= 2) {
-      // Scan y to find channel bounds (where bedZ > 5)
-      let yLo = cellH, yHi = height - cellH;
-      let found = false;
-      for (let sy = cellH; sy < height - cellH; sy += 4) {
-        if (bedZ(spawnX, sy) > 5) {
-          if (!found) { yLo = sy; found = true; }
-          yHi = sy;
-        }
-      }
-      if (found && yHi > yLo) {
-        spawnY = random(yLo, yHi);
-      } else {
-        spawnY = random(cellH, height - cellH);  // Fallback
-      }
-    } else {
-      spawnY = random(cellH, height - cellH);
-    }
-
-    particles.push({
-      x: spawnX,
-      y: spawnY,
-      vx: random(INFLOW * 0.5, INFLOW * 1.5) * cellW,
-      vy: random(-0.2, 0.2) * cellH,
-      born: simTime
-    });
+      let yLo=cellH, yHi=height-cellH, found=false;
+      for (let sy=cellH; sy<height-cellH; sy+=4) { if(bedZ(spawnX,sy)>5){if(!found){yLo=sy;found=true;}yHi=sy;} }
+      spawnY = found && yHi>yLo ? random(yLo,yHi) : random(cellH,height-cellH);
+    } else { spawnY = random(cellH, height-cellH); }
+    particles.push({ x:spawnX, y:spawnY, vx:random(inflowVel*0.5,inflowVel*1.5)*cellW, vy:random(-0.2,0.2)*cellH, born:simTime });
   }
 }
 
 // ─────────────────────────────────────────────
 // VISUAL RENDERING
 // ─────────────────────────────────────────────
-
 function drawDeposition() {
-  // Draw new deposits
   for (let d of deposited) {
-    depoBuffer.noStroke();
-    // Fresh deposit: warm amber glow
-    let alpha = 18;
-    depoBuffer.fill(255, 180, 60, alpha);
-    depoBuffer.ellipse(d.x, d.y, 6, 6);
-    // Brighter center
-    depoBuffer.fill(255, 210, 100, alpha * 0.6);
-    depoBuffer.ellipse(d.x, d.y, 3, 3);
+    depoBuffer.noStroke(); depoBuffer.fill(255,180,60,18); depoBuffer.ellipse(d.x,d.y,6,6);
+    depoBuffer.fill(255,210,100,11); depoBuffer.ellipse(d.x,d.y,3,3);
   }
 }
 
 function drawFlowField() {
   if (!showFlow) return;
-  stroke(0, 200, 255, 90);
-  strokeWeight(0.8);
-  let step = max(1, floor(min(NX, NY) / 30));
-  for (let j = step; j <= NY; j += step) {
-    for (let i = step; i <= NX; i += step) {
-      let idx = IX(i, j);
+  stroke(0,200,255,flowOpacity); strokeWeight(1.2);
+  let step = max(1, floor(min(NX,NY)/flowDensity));
+  for (let j=step; j<=NY; j+=step) {
+    for (let i=step; i<=NX; i+=step) {
+      let idx = IX(i,j);
       if (solid[idx]) continue;
-      let px = i * cellW;
-      let py = j * cellH;
-      let vx = u[idx] * cellW * 3;
-      let vy = v[idx] * cellH * 3;
-      let spd = mag(u[idx], v[idx]);
-      if (spd < 0.001) continue;
-      let len = constrain(spd * 8, 4, 30);
-      let nx = vx / spd;
-      let ny = vy / spd;
-      line(px, py, px + nx * len, py + ny * len);
-      // Arrowhead
-      let ax = px + nx * len;
-      let ay = py + ny * len;
-      let tip = 3;
-      line(ax, ay, ax - nx * tip - ny * tip * 0.5, ay - ny * tip + nx * tip * 0.5);
-      line(ax, ay, ax - nx * tip + ny * tip * 0.5, ay - ny * tip - nx * tip * 0.5);
+      let px = i*cellW, py = j*cellH;
+      let spd = mag(u[idx],v[idx]);
+      if (spd<0.001) continue;
+      let nx = u[idx]/spd, ny = v[idx]/spd;
+      let len = constrain(spd*flowScale, 8, 55);
+      line(px,py, px+nx*len, py+ny*len);
+      let ax=px+nx*len, ay=py+ny*len, tip=4;
+      line(ax,ay, ax-nx*tip-ny*tip*0.5, ay-ny*tip+nx*tip*0.5);
+      line(ax,ay, ax-nx*tip+ny*tip*0.5, ay-ny*tip-nx*tip*0.5);
     }
   }
 }
 
-function drawGrid() {
-  if (!showGrid) return;
-  stroke(30, 30, 60, 40);
-  strokeWeight(0.5);
-  for (let i = 0; i <= NX; i++) {
-    let x = i * cellW;
-    line(x, 0, x, height);
-  }
-  for (let j = 0; j <= NY; j++) {
-    let y = j * cellH;
-    line(0, y, width, y);
-  }
-}
+function drawGrid() { /* now inline */ }
 
 function drawObstacles() {
-  for (let i = 0; i < obstacles.length; i++) {
+  for (let i=0; i<obstacles.length; i++) {
     let ob = obstacles[i];
-    if (simTime < ob.appearsAt || simTime > ob.disappearsAt) continue;
-
-    push();
-    translate(ob.x, ob.y);
-    rotate(ob.rotation * PI / 180);
-
-    // Body
+    if (simTime<ob.appearsAt || simTime>ob.disappearsAt) continue;
+    push(); translate(ob.x, ob.y); rotate(ob.rotation*PI/180);
     noFill();
-    if (i === selectedIdx) {
-      stroke(255, 255, 255, 220);
-      strokeWeight(2.5);
-    } else {
-      stroke(255, 255, 255, 140);
-      strokeWeight(1.5);
-    }
-
-    let half = ob.size / 2;
-    if (ob.type === 'circle') {
-      ellipse(0, 0, ob.size);
-    } else {
-      rectMode(CENTER);
-      rect(0, 0, ob.size, ob.size);
-    }
-
-    // Selection glow
-    if (i === selectedIdx) {
-      stroke(255, 200, 100, 80);
-      strokeWeight(4);
-      if (ob.type === 'circle') {
-        ellipse(0, 0, ob.size + 6);
-      } else {
-        rect(0, 0, ob.size + 6, ob.size + 6);
-      }
-    }
-
-    // Thin center cross
-    stroke(255, 255, 255, 60);
-    strokeWeight(0.5);
-    line(-8, 0, 8, 0);
-    line(0, -8, 0, 8);
-
+    if (i===selectedIdx) { stroke(255,255,255,220); strokeWeight(2.5); }
+    else { stroke(255,255,255,140); strokeWeight(1.5); }
+    let half = ob.size/2;
+    if (ob.type==='circle') ellipse(0,0,ob.size); else { rectMode(CENTER); rect(0,0,ob.size,ob.size); }
+    if (i===selectedIdx) { stroke(255,200,100,80); strokeWeight(4); if(ob.type==='circle')ellipse(0,0,ob.size+6);else rect(0,0,ob.size+6,ob.size+6); }
+    stroke(255,255,255,60); strokeWeight(0.5); line(-8,0,8,0); line(0,-8,0,8);
     pop();
   }
 }
 
 function drawGhost() {
-  if (dragging || mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) return;
-
-  let overObstacle = hitTestObstacle(mouseX, mouseY) >= 0;
-
-  push();
-  translate(mouseX, mouseY);
-  rotate(ghostRotation * PI / 180);
-
-  drawingContext.setLineDash([4, 4]);
-  noFill();
-  stroke(overObstacle ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.25)');
-  strokeWeight(1.2);
-
-  let half = ghostSize / 2;
-  if (ghostType === 'circle') {
-    ellipse(0, 0, ghostSize);
-  } else {
-    rectMode(CENTER);
-    rect(0, 0, ghostSize, ghostSize);
-  }
+  if (dragging || mouseX<0||mouseX>width||mouseY<0||mouseY>height) return;
+  let over = hitTestObstacle(mouseX,mouseY) >= 0;
+  push(); translate(mouseX,mouseY); rotate(ghostRotation*PI/180);
+  drawingContext.setLineDash([4,4]);
+  noFill(); stroke(over?'rgba(255,255,255,0.1)':'rgba(255,255,255,0.25)'); strokeWeight(1.2);
+  let half=ghostSize/2;
+  if (ghostType==='circle') ellipse(0,0,ghostSize); else { rectMode(CENTER); rect(0,0,ghostSize,ghostSize); }
   drawingContext.setLineDash([]);
-
-  // Rotation indicator
-  stroke(255, 255, 255, 50);
-  strokeWeight(0.8);
-  line(0, 0, half + 8, 0);
-
+  stroke(255,255,255,50); strokeWeight(0.8); line(0,0,half+8,0);
   pop();
 }
 
-function drawParticles() {
-  // Mobile particles
-  noStroke();
-  fill(255, 170, 60, 200);
+function drawParticlesToBuffer() {
+  trailBuffer.noStroke();
+  let sr=parseInt(slowColor.slice(1,3),16), sg=parseInt(slowColor.slice(3,5),16), sb=parseInt(slowColor.slice(5,7),16);
+  let fr=parseInt(fastColor.slice(1,3),16), fg=parseInt(fastColor.slice(3,5),16), fb=parseInt(fastColor.slice(5,7),16);
   for (let p of particles) {
-    ellipse(p.x, p.y, 3, 3);
+    let speed = mag(p.vx,p.vy)/((cellW+cellH)/2);
+    let t = constrain(speed/colorThresh, 0, 1);
+    trailBuffer.fill(floor(sr+(fr-sr)*t), floor(sg+(fg-sg)*t), floor(sb+(fb-sb)*t), 40+t*40);
+    trailBuffer.ellipse(p.x, p.y, particleSize, particleSize);
+  }
+}
+
+function drawParticles() {
+  noStroke();
+  let sr=parseInt(slowColor.slice(1,3),16), sg=parseInt(slowColor.slice(3,5),16), sb=parseInt(slowColor.slice(5,7),16);
+  let fr=parseInt(fastColor.slice(1,3),16), fg=parseInt(fastColor.slice(3,5),16), fb=parseInt(fastColor.slice(5,7),16);
+  for (let p of particles) {
+    let speed = mag(p.vx,p.vy)/((cellW+cellH)/2);
+    let t = constrain(speed/colorThresh, 0, 1);
+    fill(floor(sr+(fr-sr)*t), floor(sg+(fg-sg)*t), floor(sb+(fb-sb)*t), 150+t*90);
+    ellipse(p.x, p.y, particleSize, particleSize);
   }
 }
 
 // ── Bed surface render ──
 function updateBedBuffer() {
-  // Redraw bed topography overlay — sampled heatmap + contour lines
   bedSurface.clear();
   if (bedPoints.length < 2) return;
-
-  let bedMaxZ = 160;
-  let step = 8;  // Sample every N pixels for gradient
-
-  // ── Gradient fill ──
+  let bedMaxZ=160, step=8;
   bedSurface.noStroke();
-  for (let px = 0; px < width; px += step) {
-    for (let py = 0; py < height; py += step) {
-      let z = bedZ(px, py);
-      if (z <= 0) continue;
-      let t = z / bedMaxZ;
-      let r = 40 + t * 80;
-      let g = 20 + t * 35;
-      let b = 10 + t * 15;
-      let a = 10 + t * 40;
-      bedSurface.fill(r, g, b, a);
-      bedSurface.rect(px, py, step, step);
+  for (let px=0; px<width; px+=step) {
+    for (let py=0; py<height; py+=step) {
+      let z=bedZ(px,py); if (z<=0) continue;
+      let t=z/bedMaxZ;
+      bedSurface.fill(40+t*80, 20+t*35, 10+t*15, 10+t*40);
+      bedSurface.rect(px,py,step,step);
+    }
+  }
+  let cStep=2, levels=[20,40,60,80,100,120,140];
+  for (let lvl of levels) {
+    let lAlpha=25+(lvl/bedMaxZ)*50;
+    for (let py=0; py<height; py+=cStep) {
+      let prevZ=bedZ(0,py);
+      for (let px=cStep; px<width; px+=cStep) {
+        let currZ=bedZ(px,py);
+        if ((prevZ-lvl)*(currZ-lvl)<0 && prevZ>0 && currZ>0) {
+          let t=(lvl-prevZ)/(currZ-prevZ), cx=(px-cStep)+t*cStep;
+          bedSurface.stroke(255,200,130,lAlpha); bedSurface.strokeWeight(0.5); bedSurface.point(cx,py);
+        }
+        prevZ=currZ;
+      }
+    }
+    for (let px=0; px<width; px+=cStep) {
+      let prevZ=bedZ(px,0);
+      for (let py=cStep; py<height; py+=cStep) {
+        let currZ=bedZ(px,py);
+        if ((prevZ-lvl)*(currZ-lvl)<0 && prevZ>0 && currZ>0) {
+          let t=(lvl-prevZ)/(currZ-prevZ), cy=(py-cStep)+t*cStep;
+          bedSurface.stroke(255,200,130,lAlpha); bedSurface.strokeWeight(0.5); bedSurface.point(px,cy);
+        }
+        prevZ=currZ;
+      }
+    }
+  }
+}
+
+function drawBedProfile() {
+  if (bedPoints.length < 2 && !bedMode) return;
+  let stripH=160, stripY=height-stripH, bedMaxZ=160;
+
+  noStroke(); fill(10,12,22,200); rect(0,stripY,width,stripH);
+  stroke(40,40,55,60); strokeWeight(0.5);
+  for (let gz=20; gz<bedMaxZ; gz+=20) { let gy=stripY+stripH-(gz/bedMaxZ)*stripH; line(0,gy,width,gy); noStroke(); fill(255,255,255,30); textAlign(RIGHT,CENTER); textSize(9); text(gz,22,gy); }
+  stroke(60,60,80,100); strokeWeight(1); line(0,stripY,width,stripY);
+  noStroke(); fill(255,255,255,50); textAlign(LEFT,TOP); textSize(10); text('bed profile (z↑)',8,stripY+4);
+
+  if (bedPoints.length >= 2) {
+    fill(30,28,45,120); noStroke(); beginShape();
+    for (let pt of bedPoints) { let sy=stripY+stripH-(pt.z/bedMaxZ)*stripH; vertex(pt.x,sy); }
+    vertex(bedPoints[bedPoints.length-1].x, stripY+stripH); vertex(bedPoints[0].x, stripY+stripH); endShape(CLOSE);
+    stroke(255,180,60,200); strokeWeight(2); noFill(); beginShape();
+    for (let pt of bedPoints) { let sy=stripY+stripH-(pt.z/bedMaxZ)*stripH; vertex(pt.x,sy); }
+    endShape();
+    for (let pt of bedPoints) { let sy=stripY+stripH-(pt.z/bedMaxZ)*stripH; fill(255,180,60,200); noStroke(); ellipse(pt.x,sy,6,6); }
+    stroke(255,180,60,30); strokeWeight(1);
+    for (let zLevel=20; zLevel<=bedMaxZ; zLevel+=20) { beginShape(); for (let pt of bedPoints) { if(pt.z>=zLevel) vertex(pt.x,0); else { endShape(); beginShape(); } } endShape(); }
+  }
+
+  if (bedMode && mouseX>=0 && mouseX<=width && mouseY>=stripY) {
+    let mz=(stripY+stripH-mouseY)/stripH*bedMaxZ; mz=max(0,min(bedMaxZ*2,mz));
+    noStroke(); fill(255,200,100,150); ellipse(mouseX, stripY+stripH-(mz/bedMaxZ)*stripH, 8,8);
+    if (bedPoints.length>0) {
+      let last=bedPoints[bedPoints.length-1];
+      let lastSY=stripY+stripH-(last.z/bedMaxZ)*stripH;
+      stroke(255,200,100,60); strokeWeight(1); line(last.x,lastSY, mouseX, stripY+stripH-(mz/bedMaxZ)*stripH);
     }
   }
 
-  // ── Contour lines ──
-  let cStep = 2;  // Fine sampling for smooth contours
-  let levels = [20, 40, 60, 80, 100, 120, 140];
+  let xStripW=60;
+  for (let si=0; si<bedPoints.length; si++) {
+    let pt=bedPoints[si], baseZ=pt.z, sx=pt.x-xStripW/2;
+    noStroke(); fill(si===activeXSection?'rgba(40,35,55,0.85)':'rgba(25,22,40,0.7)'); rect(sx,0,xStripW,stripY);
+    stroke(40,40,55,40); strokeWeight(0.5);
+    for (let gz=20; gz<=bedMaxZ; gz+=20) { let gx=sx+xStripW-(gz/bedMaxZ)*xStripW; line(gx,0,gx,stripY); }
+    stroke(si===activeXSection?'rgba(255,180,60,0.5)':'rgba(60,60,80,0.3)'); strokeWeight(1); noFill(); rect(sx,0,xStripW,stripY);
+    noStroke(); fill(255,255,255,40); textAlign(CENTER,TOP); textSize(8); text('x'+Math.round(pt.x),pt.x,2);
+    textAlign(RIGHT,BOTTOM); textSize(7); fill(255,255,255,25); text('hi',sx+2,stripY-2); textAlign(LEFT,BOTTOM); text('lo',sx+xStripW-12,stripY-2);
 
-  for (let lvl of levels) {
-    // Line alpha fades with elevation: deeper contours subtler
-    let lAlpha = 25 + (lvl / bedMaxZ) * 50;
-
-    // Horizontal scan: find crossings between adjacent x samples
-    for (let py = 0; py < height; py += cStep) {
-      let prevZ = bedZ(0, py);
-      for (let px = cStep; px < width; px += cStep) {
-        let currZ = bedZ(px, py);
-        if ((prevZ - lvl) * (currZ - lvl) < 0 && prevZ > 0 && currZ > 0) {
-          // Interpolate crossing position
-          let t = (lvl - prevZ) / (currZ - prevZ);
-          let cx = (px - cStep) + t * cStep;
-          bedSurface.stroke(255, 200, 130, lAlpha);
-          bedSurface.strokeWeight(0.5);
-          bedSurface.point(cx, py);
-        }
-        prevZ = currZ;
+    let xsData=bedXSections.find(xs=>xs.x===pt.x);
+    if (xsData && xsData.points.length>=2) {
+      let pts=[...xsData.points].sort((a,b)=>a.y-b.y);
+      stroke(255,180,60,180); strokeWeight(2); noFill(); beginShape();
+      for (let p of pts) {
+        let vy=p.y/height*stripY, absZ=baseZ+p.z, vx=sx+xStripW-(absZ/bedMaxZ)*xStripW; vx=constrain(vx,sx,sx+xStripW);
+        vertex(vx,vy);
+      }
+      endShape();
+      for (let p of pts) {
+        let vy=p.y/height*stripY, absZ=baseZ+p.z, vx=sx+xStripW-(absZ/bedMaxZ)*xStripW; vx=constrain(vx,sx,sx+xStripW);
+        fill(255,180,60,200); noStroke(); ellipse(vx,vy,5,5);
       }
     }
-
-    // Vertical scan: find crossings between adjacent y samples
-    for (let px = 0; px < width; px += cStep) {
-      let prevZ = bedZ(px, 0);
-      for (let py = cStep; py < height; py += cStep) {
-        let currZ = bedZ(px, py);
-        if ((prevZ - lvl) * (currZ - lvl) < 0 && prevZ > 0 && currZ > 0) {
-          let t = (lvl - prevZ) / (currZ - prevZ);
-          let cy = (py - cStep) + t * cStep;
-          bedSurface.stroke(255, 200, 130, lAlpha);
-          bedSurface.strokeWeight(0.5);
-          bedSurface.point(px, cy);
-        }
-        prevZ = currZ;
-      }
-    }
+    let refX=sx+xStripW-(baseZ/bedMaxZ)*xStripW; stroke(255,255,255,25); strokeWeight(0.5); line(refX,0,refX,stripY);
+    if (si===activeXSection) { noFill(); stroke(255,200,100,80); strokeWeight(1.5); rect(sx-1,0,xStripW+2,stripY); }
   }
 }
 
 // ── Isometric bed thumbnail ──
 function updateBedThumb() {
-  let canvas = document.getElementById('bed-thumb');
-  let ctx = bedThumb;
-  let TW = canvas.width;
-  let TH = canvas.height;
+  let canvas=document.getElementById('bed-thumb'), ctx=bedThumb, TW=canvas.width, TH=canvas.height;
+  ctx.clearRect(0,0,TW,TH);
+  if (bedPoints.length < 2) { ctx.fillStyle='rgba(255,255,255,0.08)'; ctx.font='10px Courier New'; ctx.textAlign='center'; ctx.fillText('no bed defined',TW/2,TH/2); return; }
+  let margin=18, viewW=TW-margin*2, viewH=TH-margin*2, bedMaxZ=160;
+  let ax=thumbAngleX*PI/180, ay=thumbAngleY*PI/180;
+  let cosAX=cos(ax), sinAX=sin(ax), cosAY=cos(ay), sinAY=sin(ay);
+  let sortedPts=[...bedPoints].sort((a,b)=>a.x-b.x);
+  let xMin=sortedPts[0].x, xMax=sortedPts[sortedPts.length-1].x, xRange=xMax-xMin||1;
 
-  ctx.clearRect(0, 0, TW, TH);
-
-  if (bedPoints.length < 2) {
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.font = '10px Courier New';
-    ctx.textAlign = 'center';
-    ctx.fillText('no bed defined', TW/2, TH/2);
-    return;
+  function projectRaw(x_px,y_px,z_px) {
+    let nx=(x_px-xMin)/xRange-0.5, ny=(y_px/height-0.5)*0.45;
+    let zScale=parseFloat(document.getElementById('z-scale').value)/100;
+    let nz=z_px/bedMaxZ*zScale;
+    let rx=nx*cosAX-ny*sinAX, ry=nx*sinAX+ny*cosAX;
+    return {x:rx, y:ry*cosAY-nz*sinAY, depth:ry*sinAY+nz*cosAY};
   }
 
-  // ── Coordinate setup ──
-  let margin = 20;
-  let viewW = TW - margin * 2;
-  let viewH = TH - margin * 2;
-  let bedMaxZ = 160;
-
-  // Rotation angles in radians
-  let ax = thumbAngleX * Math.PI / 180;  // Spin around vertical
-  let ay = thumbAngleY * Math.PI / 180;  // Elevation
-  let cosAX = Math.cos(ax), sinAX = Math.sin(ax);
-  let cosAY = Math.cos(ay), sinAY = Math.sin(ay);
-
-  // Normalize longitudinal range
-  let sortedPts = [...bedPoints].sort((a, b) => a.x - b.x);
-  let xMin = sortedPts[0].x;
-  let xMax = sortedPts[sortedPts.length - 1].x;
-  let xRange = xMax - xMin || 1;
-
-  // ── First pass: project all points to find bounding box for auto-center ──
-  function projectRaw(x_px, y_px, z_px) {
-    let nx = (x_px - xMin) / xRange - 0.5;  // -0.5..0.5 along channel
-    let ny = (y_px / height - 0.5) * 0.45;   // ±0.225 across channel
-    let zScale = parseFloat(document.getElementById('z-scale').value) / 100;
-    let nz = z_px / bedMaxZ * zScale;           // variable z exaggeration
-    // Rotate around vertical axis (ax)
-    let rx = nx * cosAX - ny * sinAX;
-    let ry = nx * sinAX + ny * cosAX;
-    // Apply elevation angle
-    let ix = rx;
-    let iy = ry * cosAY - nz * sinAY;
-    return { x: ix, y: iy, depth: ry * sinAY + nz * cosAY };  // depth for sorting
-  }
-
-  // Collect all key points
-  let allPts = [];
-  // Spine points
-  for (let pt of sortedPts) {
-    allPts.push(projectRaw(pt.x, height/2, pt.z));
-  }
-  // Rib endpoints
+  let allPts=[];
+  for (let pt of sortedPts) allPts.push(projectRaw(pt.x,height/2,pt.z));
   for (let xs of bedXSections) {
-    let station = sortedPts.find(p => p.x === xs.x);
-    if (!station) continue;
-    for (let rp of xs.points) {
-      let absZ = station.z + rp.z;
-      allPts.push(projectRaw(xs.x, rp.y, absZ));
-    }
+    let station=sortedPts.find(p=>p.x===xs.x); if(!station) continue;
+    for (let rp of xs.points) allPts.push(projectRaw(xs.x,rp.y,station.z+rp.z));
+  }
+  let bxMin=Infinity,bxMax=-Infinity,byMin=Infinity,byMax=-Infinity;
+  for (let p of allPts) { if(p.x<bxMin)bxMin=p.x; if(p.x>bxMax)bxMax=p.x; if(p.y<byMin)byMin=p.y; if(p.y>byMax)byMax=p.y; }
+  let scale=min(viewW/(bxMax-bxMin||1), viewH/(byMax-byMin||1))*0.88;
+  let cx=(bxMin+bxMax)/2, cy=(byMin+byMax)/2;
+
+  function project(x_px,y_px,z_px) {
+    let raw=projectRaw(x_px,y_px,z_px);
+    return {x:margin+viewW/2+(raw.x-cx)*scale, y:margin+viewH/2+(raw.y-cy)*scale, depth:raw.depth};
   }
 
-  // Compute bounding box
-  let bxMin = Infinity, bxMax = -Infinity, byMin = Infinity, byMax = -Infinity;
-  for (let p of allPts) {
-    if (p.x < bxMin) bxMin = p.x;
-    if (p.x > bxMax) bxMax = p.x;
-    if (p.y < byMin) byMin = p.y;
-    if (p.y > byMax) byMax = p.y;
-  }
-  let bxRange = bxMax - bxMin || 1;
-  let byRange = byMax - byMin || 1;
-  let scale = Math.min(viewW / bxRange, viewH / byRange) * 0.88;
-  let cx = (bxMin + bxMax) / 2;
-  let cy = (byMin + byMax) / 2;
+  ctx.fillStyle='rgba(10,12,22,0.92)'; ctx.fillRect(0,0,TW,TH);
+  ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.lineWidth=0.5;
+  for (let gz=0; gz<=bedMaxZ; gz+=40) { let p0=project(xMin,height/2,gz), p1=project(xMax,height/2,gz); ctx.beginPath(); ctx.moveTo(p0.x,p0.y); ctx.lineTo(p1.x,p1.y); ctx.stroke(); }
 
-  // ── Final projection with auto-centering ──
-  function project(x_px, y_px, z_px) {
-    let raw = projectRaw(x_px, y_px, z_px);
-    return {
-      x: margin + viewW/2 + (raw.x - cx) * scale,
-      y: margin + viewH/2 + (raw.y - cy) * scale,
-      depth: raw.depth
-    };
-  }
-
-  // Background
-  ctx.fillStyle = 'rgba(10,12,22,0.92)';
-  ctx.fillRect(0, 0, TW, TH);
-
-  // ── Reference grid ──
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-  ctx.lineWidth = 0.5;
-  for (let gz = 0; gz <= bedMaxZ; gz += 40) {
-    let p0 = project(xMin, height/2, gz);
-    let p1 = project(xMax, height/2, gz);
-    ctx.beginPath();
-    ctx.moveTo(p0.x, p0.y);
-    ctx.lineTo(p1.x, p1.y);
-    ctx.stroke();
-  }
-
-  // ── Collect ribs with depth info for sorting ──
-  let ribs = [];
+  let ribs=[];
   for (let pt of sortedPts) {
-    let xsData = bedXSections.find(xs => xs.x === pt.x);
-    if (!xsData || xsData.points.length < 2) continue;
-    let pts = [...xsData.points].sort((a, b) => a.y - b.y);
-    let ribPts = [];
-    let maxDepth = -Infinity;
-    for (let rp of pts) {
-      let absZ = pt.z + rp.z;
-      let proj = project(pt.x, rp.y, absZ);
-      ribPts.push(proj);
-      if (proj.depth > maxDepth) maxDepth = proj.depth;
-    }
-    ribs.push({ station: pt, points: ribPts, depth: maxDepth });
+    let xsData=bedXSections.find(xs=>xs.x===pt.x); if(!xsData||xsData.points.length<2) continue;
+    let pts=[...xsData.points].sort((a,b)=>a.y-b.y), ribPts=[], maxDepth=-Infinity;
+    for (let rp of pts) { let proj=project(pt.x,rp.y,pt.z+rp.z); ribPts.push(proj); if(proj.depth>maxDepth)maxDepth=proj.depth; }
+    ribs.push({station:pt,points:ribPts,depth:maxDepth});
   }
+  let sortedRibs=[...ribs].sort((a,b)=>a.depth-b.depth);
 
-  // Sort ribs far-to-near for wireframe mesh
-  let sortedRibs = [...ribs].sort((a, b) => a.depth - b.depth);
-
-  // ── Surface wireframe: connect adjacent ribs ──
-  // Resample ribs to shared y-grid first
-  let ySamples = 16;
-  let yGrid = [];
-  for (let yi = 0; yi <= ySamples; yi++) {
-    yGrid.push(yi / ySamples * height);
-  }
-
-  // Build resampled rib arrays
-  let sampledRibs = [];
+  let ySamples=16, yGrid=[];
+  for (let yi=0; yi<=ySamples; yi++) yGrid.push(yi/ySamples*height);
+  let sampledRibs=[];
   for (let rib of ribs) {
-    let xsData = bedXSections.find(xs => xs.x === rib.station.x);
-    let ribPts = [...xsData.points].sort((a, b) => a.y - b.y);
-    let samples = [];
+    let xsData=bedXSections.find(xs=>xs.x===rib.station.x), ribPts=[...xsData.points].sort((a,b)=>a.y-b.y), samples=[];
     for (let sy of yGrid) {
-      // Interpolate z at this y
-      let zAbs = rib.station.z;
-      if (sy <= ribPts[0].y) {
-        zAbs += ribPts[0].z;
-      } else if (sy >= ribPts[ribPts.length - 1].y) {
-        zAbs += ribPts[ribPts.length - 1].z;
-      } else {
-        for (let k = 0; k < ribPts.length - 1; k++) {
-          if (ribPts[k].y <= sy && sy <= ribPts[k + 1].y) {
-            let t = (sy - ribPts[k].y) / (ribPts[k + 1].y - ribPts[k].y);
-            zAbs += ribPts[k].z + t * (ribPts[k + 1].z - ribPts[k].z);
-            break;
-          }
-        }
-      }
-      samples.push(project(rib.station.x, sy, zAbs));
+      let zAbs=rib.station.z;
+      if(sy<=ribPts[0].y) zAbs+=ribPts[0].z;
+      else if(sy>=ribPts[ribPts.length-1].y) zAbs+=ribPts[ribPts.length-1].z;
+      else for(let k=0;k<ribPts.length-1;k++) if(ribPts[k].y<=sy&&sy<=ribPts[k+1].y){let t=(sy-ribPts[k].y)/(ribPts[k+1].y-ribPts[k].y);zAbs+=ribPts[k].z+t*(ribPts[k+1].z-ribPts[k].z);break;}
+      samples.push(project(rib.station.x,sy,zAbs));
     }
-    sampledRibs.push({ station: rib.station, samples: samples, depth: rib.depth });
+    sampledRibs.push({station:rib.station,samples,depth:rib.depth});
+  }
+  sampledRibs.sort((a,b)=>a.depth-b.depth);
+  let sampledByX=[...sampledRibs].sort((a,b)=>a.station.x-b.station.x);
+  for (let ri=0; ri<sampledByX.length-1; ri++) {
+    let rA=sampledByX[ri], rB=sampledByX[ri+1], avgDepth=(rA.depth+rB.depth)/2;
+    ctx.strokeStyle=`rgba(255,200,130,${0.08+avgDepth*0.14})`; ctx.lineWidth=0.6;
+    for (let si=0; si<rA.samples.length; si++) { ctx.beginPath(); ctx.moveTo(rA.samples[si].x,rA.samples[si].y); ctx.lineTo(rB.samples[si].x,rB.samples[si].y); ctx.stroke(); }
   }
 
-  // Sort sampled ribs
-  sampledRibs.sort((a, b) => a.depth - b.depth);
-
-  // Draw connecting lines between adjacent ribs (ordered by station x)
-  let sampledByX = [...sampledRibs].sort((a, b) => a.station.x - b.station.x);
-  for (let ri = 0; ri < sampledByX.length - 1; ri++) {
-    let rA = sampledByX[ri];
-    let rB = sampledByX[ri + 1];
-    let avgDepth = (rA.depth + rB.depth) / 2;
-    // Farther connections → more transparent
-    let alpha = 0.08 + avgDepth * 0.14;
-    ctx.strokeStyle = `rgba(255,200,130,${alpha})`;
-    ctx.lineWidth = 0.6;
-    for (let si = 0; si < rA.samples.length; si++) {
-      ctx.beginPath();
-      ctx.moveTo(rA.samples[si].x, rA.samples[si].y);
-      ctx.lineTo(rB.samples[si].x, rB.samples[si].y);
-      ctx.stroke();
-    }
+  let spinePts=[];
+  for (let pt of sortedPts) spinePts.push({...project(pt.x,height/2,pt.z),station:pt});
+  for (let k=0; k<spinePts.length-1; k++) {
+    let pA=spinePts[k],pB=spinePts[k+1],d=(pA.depth+pB.depth)/2;
+    ctx.strokeStyle=`rgba(255,180,60,${0.5+d*0.4})`; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(pA.x,pA.y); ctx.lineTo(pB.x,pB.y); ctx.stroke();
   }
 
-  // ── Draw spine ──
-  let spinePts = [];
-  for (let pt of sortedPts) {
-    spinePts.push({ ...project(pt.x, height/2, pt.z), station: pt });
-  }
-  // Spine segments: farther ones slightly dimmer
-  for (let k = 0; k < spinePts.length - 1; k++) {
-    let pA = spinePts[k], pB = spinePts[k + 1];
-    let d = (pA.depth + pB.depth) / 2;
-    let alpha = 0.5 + d * 0.4;
-    ctx.strokeStyle = `rgba(255,180,60,${alpha})`;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(pA.x, pA.y);
-    ctx.lineTo(pB.x, pB.y);
-    ctx.stroke();
-  }
-
-  // ── Draw ribs (far to near) ──
   for (let rib of sortedRibs) {
-    let d = rib.depth;
-    let alpha = 0.35 + d * 0.45;
-    let spineXY = project(rib.station.x, height/2, rib.station.z);
-
-    ctx.strokeStyle = `rgba(255,200,100,${alpha})`;
-    ctx.lineWidth = 1.2;
+    let d=rib.depth, spineXY=project(rib.station.x,height/2,rib.station.z);
+    ctx.strokeStyle=`rgba(255,200,100,${0.35+d*0.45})`; ctx.lineWidth=1.2;
     ctx.beginPath();
-    for (let pi = 0; pi < rib.points.length; pi++) {
-      if (pi === 0) ctx.moveTo(rib.points[pi].x, rib.points[pi].y);
-      else ctx.lineTo(rib.points[pi].x, rib.points[pi].y);
-    }
+    for (let pi=0; pi<rib.points.length; pi++) { if(pi===0)ctx.moveTo(rib.points[pi].x,rib.points[pi].y); else ctx.lineTo(rib.points[pi].x,rib.points[pi].y); }
     ctx.stroke();
-
-    // Connection dot
-    ctx.fillStyle = `rgba(255,200,100,${0.4 + d * 0.4})`;
-    ctx.beginPath();
-    ctx.arc(spineXY.x, spineXY.y, 2.5, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillStyle=`rgba(255,200,100,${0.4+d*0.4})`; ctx.beginPath(); ctx.arc(spineXY.x,spineXY.y,2.5,0,PI*2); ctx.fill();
   }
 
-  // ── Spine dots at plain stations ──
   for (let pt of sortedPts) {
-    if (bedXSections.some(xs => xs.x === pt.x && xs.points.length >= 2)) continue;
-    let p = project(pt.x, height/2, pt.z);
-    ctx.fillStyle = `rgba(255,180,60,${0.25 + p.depth * 0.4})`;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
-    ctx.fill();
+    if (bedXSections.some(xs=>xs.x===pt.x&&xs.points.length>=2)) continue;
+    let p=project(pt.x,height/2,pt.z);
+    ctx.fillStyle=`rgba(255,180,60,${0.25+p.depth*0.4})`; ctx.beginPath(); ctx.arc(p.x,p.y,2,0,PI*2); ctx.fill();
   }
-
-  // ── Border ──
-  ctx.strokeStyle = 'rgba(255,200,100,0.2)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(1, 1, TW - 2, TH - 2);
-}
-
-function drawBedProfile() {
-  if (bedPoints.length < 2 && !bedMode) return;
-  
-  let stripH = 160;  // Height of the section design strip
-  let stripY = height - stripH;
-  
-  // ── Design strip background ──
-  noStroke();
-  fill(10, 12, 22, 200);
-  rect(0, stripY, width, stripH);
-  
-  // Grid lines
-  let bedMaxZ = 160;
-  stroke(40, 40, 55, 60);
-  strokeWeight(0.5);
-  for (let gz = 20; gz < bedMaxZ; gz += 20) {
-    let gy = stripY + stripH - (gz / bedMaxZ) * stripH;
-    line(0, gy, width, gy);
-    // Label
-    noStroke();
-    fill(255, 255, 255, 30);
-    textAlign(RIGHT, CENTER);
-    textSize(9);
-    text(gz, 22, gy);
-  }
-  
-  // Strip border
-  stroke(60, 60, 80, 100);
-  strokeWeight(1);
-  line(0, stripY, width, stripY);
-  
-  // Label
-  noStroke();
-  fill(255, 255, 255, 50);
-  textAlign(LEFT, TOP);
-  textSize(10);
-  text('bed profile (z↑)', 8, stripY + 4);
-  
-  // ── Draw profile curve in the strip ──
-  // Map z values (0 to bedH) to strip y (stripY+stripH = bottom, stripY = top)
-  bedMaxZ = 160;  // Max display height in px (matches stripH)
-  if (bedPoints.length >= 2) {
-    // Fill below profile in strip
-    fill(30, 28, 45, 120);
-    noStroke();
-    beginShape();
-    for (let pt of bedPoints) {
-      let sy = stripY + stripH - (pt.z / bedMaxZ) * stripH;
-      vertex(pt.x, sy);
-    }
-    vertex(bedPoints[bedPoints.length - 1].x, stripY + stripH);
-    vertex(bedPoints[0].x, stripY + stripH);
-    endShape(CLOSE);
-    
-    // Profile line in strip
-    stroke(255, 180, 60, 200);
-    strokeWeight(2);
-    noFill();
-    beginShape();
-    for (let pt of bedPoints) {
-      let sy = stripY + stripH - (pt.z / bedMaxZ) * stripH;
-      vertex(pt.x, sy);
-    }
-    endShape();
-    
-    // Control points in strip
-    for (let pt of bedPoints) {
-      let sy = stripY + stripH - (pt.z / bedMaxZ) * stripH;
-      fill(255, 180, 60, 200);
-      noStroke();
-      ellipse(pt.x, sy, 6, 6);
-    }
-    
-    // ── Draw contour lines on the main canvas (plan view) ──
-    // Contours represent z(x) extruded across all y
-    stroke(255, 180, 60, 30);
-    strokeWeight(1);
-    for (let zLevel = 20; zLevel <= bedMaxZ; zLevel += 20) {
-      beginShape();
-      for (let pt of bedPoints) {
-        if (pt.z >= zLevel) {
-          vertex(pt.x, 0);
-        } else {
-          // Find where profile crosses this z-level
-          endShape();
-          beginShape();
-        }
-      }
-      endShape();
-    }
-  }
-  
-  // ── Bed mode indicator in strip ──
-  if (bedMode && mouseX >= 0 && mouseX <= width && mouseY >= stripY) {
-    // Snap to strip for drawing
-    let mz = (stripY + stripH - mouseY) / stripH * bedMaxZ;
-    mz = max(0, min(bedMaxZ * 2, mz));
-    noStroke();
-    fill(255, 200, 100, 150);
-    ellipse(mouseX, stripY + stripH - (mz / bedMaxZ) * stripH, 8, 8);
-    
-    if (bedPoints.length > 0) {
-      let last = bedPoints[bedPoints.length - 1];
-      let lastSY = stripY + stripH - (last.z / bedMaxZ) * stripH;
-      stroke(255, 200, 100, 60);
-      strokeWeight(1);
-      line(last.x, lastSY, mouseX, stripY + stripH - (mz / bedMaxZ) * stripH);
-    }
-  }
-
-  // ── Cross-section strips ──
-  let xStripW = 60;  // Width of each vertical cross-section strip (doubled)
-  for (let si = 0; si < bedPoints.length; si++) {
-    let pt = bedPoints[si];
-    let baseZ = pt.z;  // Anchor z from longitudinal section
-    let sx = pt.x - xStripW / 2;
-    
-    // Strip background
-    noStroke();
-    fill(si === activeXSection ? 'rgba(40,35,55,0.85)' : 'rgba(25,22,40,0.7)');
-    rect(sx, 0, xStripW, stripY);
-    
-    // Light grid lines (vertical, at elevation intervals)
-    stroke(40, 40, 55, 40);
-    strokeWeight(0.5);
-    for (let gz = 20; gz <= bedMaxZ; gz += 20) {
-      // Map elevation to horizontal position: right edge = z=0 (deepest), left = z=bedMaxZ (highest)
-      let gx = sx + xStripW - (gz / bedMaxZ) * xStripW;
-      line(gx, 0, gx, stripY);
-    }
-    
-    // Strip border
-    stroke(si === activeXSection ? 'rgba(255,180,60,0.5)' : 'rgba(60,60,80,0.3)');
-    strokeWeight(1);
-    noFill();
-    rect(sx, 0, xStripW, stripY);
-    
-    // Label at top
-    noStroke();
-    fill(255, 255, 255, 40);
-    textAlign(CENTER, TOP);
-    textSize(8);
-    text('x' + Math.round(pt.x), pt.x, 2);
-    
-    // Elevation labels at bottom
-    textAlign(RIGHT, BOTTOM);
-    textSize(7);
-    fill(255, 255, 255, 25);
-    text('hi', sx + 2, stripY - 2);
-    textAlign(LEFT, BOTTOM);
-    text('lo', sx + xStripW - 12, stripY - 2);
-    
-    // Find or create cross-section data
-    let xsData = bedXSections.find(xs => xs.x === pt.x);
-    
-    // Draw existing profile if present
-    if (xsData && xsData.points.length >= 2) {
-      // Sort by y (cross-channel position)
-      let pts = [...xsData.points].sort((a, b) => a.y - b.y);
-      
-      // Profile line: y→vertical position, z→horizontal position (right=low)
-      stroke(255, 180, 60, 180);
-      strokeWeight(2);
-      noFill();
-      beginShape();
-      for (let p of pts) {
-        // y maps to vertical position in strip (bottom of canvas = bottom of strip)
-        let vy = p.y / height * stripY;
-        // z maps to horizontal: right edge = z=0 (deep), left edge = z=bedMaxZ (high)
-        // The drawn z is relative to baseZ, so actual elevation = baseZ + p.z
-        let absZ = baseZ + p.z;
-        let vx = sx + xStripW - (absZ / bedMaxZ) * xStripW;
-        vx = constrain(vx, sx, sx + xStripW);
-        vertex(vx, vy);
-      }
-      endShape();
-      
-      // Control points
-      for (let p of pts) {
-        let vy = p.y / height * stripY;
-        let absZ = baseZ + p.z;
-        let vx = sx + xStripW - (absZ / bedMaxZ) * xStripW;
-        vx = constrain(vx, sx, sx + xStripW);
-        fill(255, 180, 60, 200);
-        noStroke();
-        ellipse(vx, vy, 5, 5);
-      }
-    }
-    
-    // Reference line (base z from bottom strip)
-    let refX = sx + xStripW - (baseZ / bedMaxZ) * xStripW;
-    stroke(255, 255, 255, 25);
-    strokeWeight(0.5);
-    line(refX, 0, refX, stripY);
-    
-    // Active indicator
-    if (si === activeXSection) {
-      noFill();
-      stroke(255, 200, 100, 80);
-      strokeWeight(1.5);
-      rect(sx - 1, 0, xStripW + 2, stripY);
-    }
-  }
+  ctx.strokeStyle='rgba(255,200,100,0.2)'; ctx.lineWidth=1; ctx.strokeRect(1,1,TW-2,TH-2);
 }
 
 function updateHUD() {
-  let fmt = (n) => n.toFixed(1);
-  document.getElementById('simtime').textContent = fmt(simTime);
-  document.getElementById('mobile').textContent = particles.length;
-  document.getElementById('deposited').textContent = deposited.length;
-  document.getElementById('obstacles').textContent = obstacles.length;
-  document.getElementById('shape').textContent = ghostType;
-  document.getElementById('rot').textContent = fmt(ghostRotation % 360);
-  document.getElementById('paused').textContent = paused ? '⏸ PAUSED' : '';
-  if (bedMode) {
-    document.getElementById('paused').textContent = '🖉 BED MODE (' + bedPoints.length + ' pts)';
-  }
-
-  let help = document.getElementById('help');
-  help.style.opacity = showHelp ? '1' : '0';
+  let fmt=(n)=>n.toFixed(1);
+  document.getElementById('simtime').textContent=fmt(simTime);
+  document.getElementById('mobile').textContent=particles.length;
+  document.getElementById('deposited').textContent=deposited.length;
+  document.getElementById('obstacles').textContent=obstacles.length;
+  document.getElementById('shape').textContent=ghostType;
+  document.getElementById('rot').textContent=fmt(ghostRotation%360);
+  document.getElementById('paused').textContent=paused?(bedMode?'🖉 BED MODE ('+bedPoints.length+' pts)':'⏸ PAUSED'):'';
+  document.getElementById('help').style.opacity=showHelp?'1':'0';
 }
 
 // ─────────────────────────────────────────────
 // P5.JS LIFECYCLE
 // ─────────────────────────────────────────────
-
 function setup() {
-  createCanvas(windowWidth, windowHeight);
+  let cw = windowWidth - 270;
+  let ch = windowHeight;
+  let canvas = createCanvas(cw, ch);
   pixelDensity(1);
 
   cellW = width / NX;
   cellH = height / NY;
 
-  // Allocate fluid arrays
-  u     = new Float32Array(SIZE);
-  v     = new Float32Array(SIZE);
-  uPrev = new Float32Array(SIZE);
-  vPrev = new Float32Array(SIZE);
-  solid = new Uint8Array(SIZE);
-  p     = new Float32Array(SIZE);
-  divArr = new Float32Array(SIZE);
+  u = new Float32Array(SIZE); v = new Float32Array(SIZE);
+  uPrev = new Float32Array(SIZE); vPrev = new Float32Array(SIZE);
+  solid = new Uint8Array(SIZE); p = new Float32Array(SIZE); divArr = new Float32Array(SIZE);
 
-  // Deposition buffer
   depoBuffer = createGraphics(width, height);
   depoBuffer.background(0, 0);
 
-  // Bed surface overlay buffer
+  trailBuffer = createGraphics(width, height);
+  trailBuffer.background(0, 0);
+
   bedSurface = createGraphics(width, height);
   bedSurface.background(0, 0);
   updateBedBuffer();
 
-  // Isometric bed thumbnail
   bedThumb = document.getElementById('bed-thumb').getContext('2d');
   updateBedThumb();
 
-  // Rotation drag handlers on thumbnail
   let thumbCanvas = document.getElementById('bed-thumb');
   thumbCanvas.addEventListener('mousedown', function(e) {
-    thumbDragging = true;
-    thumbDragLast = { x: e.clientX, y: e.clientY };
-    e.stopPropagation();
+    thumbDragging = true; thumbDragLast = { x: e.clientX, y: e.clientY }; e.stopPropagation();
   });
   window.addEventListener('mousemove', function(e) {
     if (!thumbDragging) return;
-    let dx = e.clientX - thumbDragLast.x;
-    let dy = e.clientY - thumbDragLast.y;
+    let dx = e.clientX - thumbDragLast.x, dy = e.clientY - thumbDragLast.y;
     thumbAngleX = (thumbAngleX + dx * 0.5) % 360;
-    thumbAngleY = Math.max(5, Math.min(85, thumbAngleY - dy * 0.5));
+    thumbAngleY = max(5, min(85, thumbAngleY - dy * 0.5));
     thumbDragLast = { x: e.clientX, y: e.clientY };
     updateBedThumb();
   });
-  window.addEventListener('mouseup', function() {
-    thumbDragging = false;
-  });
+  window.addEventListener('mouseup', function() { thumbDragging = false; });
 
-  // Z-scale slider
   document.getElementById('z-scale').addEventListener('input', function() {
     updateBedThumb();
+    document.getElementById('z-scale-val').textContent = (parseInt(this.value)/100).toFixed(2);
   });
 
-  // Seed obstacles for an interesting starting scene
-  addObstacle(width * 0.2, height * 0.35, 'circle', 0);
-  addObstacle(width * 0.35, height * 0.6, 'square', 30);
-  addObstacle(width * 0.55, height * 0.4, 'square', -15);
+  // Physics sliders
+  document.getElementById('inflow').addEventListener('input', function(){inflowVel=parseFloat(this.value);document.getElementById('inflow-val').textContent=inflowVel.toFixed(1);});
+  document.getElementById('settle-thresh').addEventListener('input', function(){settleThresh=parseFloat(this.value);document.getElementById('settle-thresh-val').textContent=settleThresh.toFixed(2);});
+  document.getElementById('settle-prob').addEventListener('input', function(){settleProb=parseFloat(this.value);document.getElementById('settle-prob-val').textContent=settleProb.toFixed(3);});
+  document.getElementById('erosion-thresh').addEventListener('input', function(){erosionThresh=parseFloat(this.value);document.getElementById('erosion-thresh-val').textContent=erosionThresh.toFixed(2);});
+  document.getElementById('erosion-prob').addEventListener('input', function(){erosionProb=parseFloat(this.value);document.getElementById('erosion-prob-val').textContent=erosionProb.toFixed(3);});
+
+  // Render sliders
+  document.getElementById('trail-fade').addEventListener('input', function(){trailFade=parseInt(this.value);document.getElementById('trail-fade-val').textContent=trailFade;});
+  document.getElementById('particle-size').addEventListener('input', function(){particleSize=parseFloat(this.value);document.getElementById('particle-size-val').textContent=particleSize;});
+  document.getElementById('slow-color').addEventListener('input', function(){slowColor=this.value;});
+  document.getElementById('fast-color').addEventListener('input', function(){fastColor=this.value;});
+  document.getElementById('color-thresh').addEventListener('input', function(){colorThresh=parseFloat(this.value);document.getElementById('color-thresh-val').textContent=colorThresh.toFixed(2);});
+  document.getElementById('flow-scale').addEventListener('input', function(){flowScale=parseInt(this.value);document.getElementById('flow-scale-val').textContent=flowScale;});
+  document.getElementById('flow-dens').addEventListener('input', function(){flowDensity=parseInt(this.value);document.getElementById('flow-dens-val').textContent=flowDensity;});
+  document.getElementById('flow-opacity').addEventListener('input', function(){flowOpacity=parseInt(this.value);document.getElementById('flow-opacity-val').textContent=flowOpacity;});
+  document.getElementById('particle-count').addEventListener('input', function(){particleCount=parseInt(this.value);document.getElementById('particle-count-val').textContent=particleCount;while(particles.length+deposited.length<particleCount)particles.push(spawnParticle());});
+
+  // Toggles
+  function updateToggles(){
+    document.getElementById('toggle-grid').className=showGrid?'tg-on':'tg-off';
+    document.getElementById('toggle-flow').className=showFlow?'tg-on':'tg-off';
+    document.getElementById('toggle-bed').className=bedMode?'tg-on':'tg-off';
+    document.getElementById('toggle-pause').className=paused?'tg-on':'tg-off';
+  }
+  document.getElementById('toggle-grid').addEventListener('click',function(){showGrid=!showGrid;updateToggles();});
+  document.getElementById('toggle-flow').addEventListener('click',function(){showFlow=!showFlow;updateToggles();});
+  document.getElementById('toggle-bed').addEventListener('click',function(){bedMode=!bedMode;if(bedMode)paused=true;else paused=false;updateToggles();});
+  document.getElementById('toggle-pause').addEventListener('click',function(){paused=!paused;updateToggles();});
+  updateToggles();
+
+  // Reset buttons
+  document.getElementById('reset-physics').addEventListener('click',function(){
+    inflowVel=2.5;settleThresh=0.20;erosionThresh=0.50;settleProb=0.012;erosionProb=0.06;
+    document.getElementById('inflow').value=2.5;document.getElementById('inflow-val').textContent='2.5';
+    document.getElementById('settle-thresh').value=0.20;document.getElementById('settle-thresh-val').textContent='0.20';
+    document.getElementById('settle-prob').value=0.012;document.getElementById('settle-prob-val').textContent='0.012';
+    document.getElementById('erosion-thresh').value=0.50;document.getElementById('erosion-thresh-val').textContent='0.50';
+    document.getElementById('erosion-prob').value=0.06;document.getElementById('erosion-prob-val').textContent='0.06';
+  });
+  document.getElementById('reset-render').addEventListener('click',function(){
+    trailFade=7;particleSize=2;slowColor='#ff44aa';fastColor='#ddeeff';
+    colorThresh=0.5;flowScale=25;flowDensity=8;flowOpacity=140;
+    document.getElementById('trail-fade').value=7;document.getElementById('trail-fade-val').textContent='7';
+    document.getElementById('particle-size').value=2;document.getElementById('particle-size-val').textContent='2';
+    document.getElementById('slow-color').value='#ff44aa';document.getElementById('fast-color').value='#ddeeff';
+    document.getElementById('color-thresh').value=0.5;document.getElementById('color-thresh-val').textContent='0.50';
+    document.getElementById('flow-scale').value=25;document.getElementById('flow-scale-val').textContent='25';
+    document.getElementById('flow-dens').value=8;document.getElementById('flow-dens-val').textContent='8';
+    document.getElementById('flow-opacity').value=140;document.getElementById('flow-opacity-val').textContent='140';
+  });
+
+  addObstacle(width*0.2, height*0.35, 'circle', 0);
+  addObstacle(width*0.35, height*0.6, 'square', 30);
+  addObstacle(width*0.55, height*0.4, 'square', -15);
   ghostRotation = 30;
 
-  // ── Spin up the flow before spawning particles ──
-  // Without this, particles spawn in dead water and settle instantly
-  for (let k = 0; k < 80; k++) {
-    simTime += DT;
-    buildSolidMask();
-    velocityStep();
-  }
-
+  for (let k=0; k<80; k++) { simTime+=DT; buildSolidMask(); velocityStep(); }
   initParticles();
 }
 
 function draw() {
   if (!paused) {
     simTime += DT;
-
-    // Build solid mask from current obstacles
     buildSolidMask();
-
-    // Fluid step
     velocityStep();
-
-    // Particles
     updateParticles();
-
-    // Draw deposition this frame
     drawDeposition();
   }
 
-  // ── COMPOSITE ──
-  // Background
   background(10, 10, 20);
-
-  // Grid
-  drawGrid();
-
-  // Bed surface overlay (below deposits, above background)
-  if (!bedMode) image(bedSurface, 0, 0);
-
-  // Bed profile editor strips (bed mode only)
   drawBedProfile();
-
-  // Deposition buffer
   image(depoBuffer, 0, 0);
 
-  // Flow field vectors
+  // Bed surface — behind trails so trails paint over it
+  if (!bedMode) image(bedSurface, 0, 0);
+
+  if (!bedMode) {
+    trailBuffer.push(); trailBuffer.noStroke(); trailBuffer.fill(10,10,20,trailFade); trailBuffer.rect(0,0,width,height); trailBuffer.pop();
+    drawParticlesToBuffer();
+    image(trailBuffer, 0, 0);
+  } else {
+    trailBuffer.clear();
+  }
+
   drawFlowField();
-
-  // Mobile particles
   drawParticles();
-
-  // Obstacles
   drawObstacles();
-
-  // Ghost preview
   if (!paused && !bedMode) drawGhost();
 
-  // HUD
+  if (showGrid) {
+    stroke(30,30,60,80); strokeWeight(0.5);
+    for (let i=0;i<=NX;i++){let x=i*cellW;line(x,0,x,height);}
+    for (let j=0;j<=NY;j++){let y=j*cellH;line(0,y,width,y);}
+    let ms=10; stroke(50,45,80,140); strokeWeight(1);
+    for (let i=0;i<=NX;i+=ms){let x=i*cellW;line(x,0,x,height);}
+    for (let j=0;j<=NY;j+=ms){let y=j*cellH;line(0,y,width,y);}
+  }
+
   updateHUD();
-  
-  // Update comparison panel if visible
   if (showComparison) drawComparison();
+}
+
+function windowResized() {
+  let cw = windowWidth - 270;
+  let ch = windowHeight;
+  resizeCanvas(cw, ch);
+  cellW = width/NX; cellH = height/NY;
+
+  let oldDepo = depoBuffer; depoBuffer = createGraphics(width,height);
+  if (oldDepo) { depoBuffer.image(oldDepo,0,0,width,height); oldDepo.remove(); }
+
+  let oldTrail = trailBuffer; trailBuffer = createGraphics(width,height); trailBuffer.background(0,0);
+  if (oldTrail) oldTrail.remove();
+
+  let oldBed = bedSurface; bedSurface = createGraphics(width,height); bedSurface.background(0,0);
+  if (oldBed) oldBed.remove();
+  updateBedBuffer(); updateBedThumb();
 }
 
 // ─────────────────────────────────────────────
 // INTERACTION
 // ─────────────────────────────────────────────
+function hitTestObstacle(mx, my) {
+  for (let i=obstacles.length-1;i>=0;i--) {
+    let ob=obstacles[i];
+    if (simTime<ob.appearsAt||simTime>ob.disappearsAt) continue;
+    let dx=mx-ob.x, dy=my-ob.y;
+    if (ob.type==='circle') { if (dx*dx+dy*dy<=(ob.size/2+6)*(ob.size/2+6)) return i; }
+    else {
+      let cosA=cos(-ob.rotation*PI/180), sinA=sin(-ob.rotation*PI/180);
+      let rx=dx*cosA-dy*sinA, ry=dx*sinA+dy*cosA, h=ob.size/2+6;
+      if (abs(rx)<=h&&abs(ry)<=h) return i;
+    }
+  }
+  return -1;
+}
 
-function mousePressed() {
-  if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) return;
+function addObstacle(x, y, type, rot) {
+  obstacles.push({ type, x, y, size: ghostSize, rotation: rot||0, appearsAt: simTime, disappearsAt: Infinity });
+}
+
+function deleteObstacle(idx) { if (idx>=0&&idx<obstacles.length) obstacles.splice(idx,1); }
+
+function mousePressed(event) {
+  if (event && event.target) { let t=event.target; if (t.closest('#sidebar')||t.tagName==='BUTTON'||t.id==='bed-thumb') return; }
+  if (mouseX<0||mouseX>width||mouseY<0||mouseY>height) return;
 
   if (bedMode) {
-    let stripH = 160;
-    let stripY = height - stripH;
-    let bedMaxZ = 160;
-    
-    // Click in design strip → modify longitudinal section
+    let stripH=160, stripY=height-stripH, bedMaxZ=160;
+    editingLongPt=-1; editingXSStation=null;
+
     if (mouseY >= stripY) {
-      let z = (stripY + stripH - mouseY) / stripH * bedMaxZ;
-      bedPoints.push({ x: mouseX, z: max(0, z) });
-      bedPoints.sort((a, b) => a.x - b.x);
-      updateBedBuffer();
-      updateBedThumb();
-      return;
-    }
-    
-    // Click on main canvas → select nearest vertical strip
-    // Find the closest profile point
-    let closestIdx = -1;
-    let closestDist = Infinity;
-    for (let i = 0; i < bedPoints.length; i++) {
-      let d = abs(mouseX - bedPoints[i].x);
-      if (d < 40 && d < closestDist) {  // Within 40px of a station
-        closestDist = d;
-        closestIdx = i;
+      for (let i=0;i<bedPoints.length;i++) {
+        let sx=bedPoints[i].x, sy=stripY+stripH-(bedPoints[i].z/bedMaxZ)*stripH;
+        if (dist(mouseX,mouseY,sx,sy)<10) { editingLongPt=i; return; }
       }
+      let z=(stripY+stripH-mouseY)/stripH*bedMaxZ;
+      bedPoints.push({x:mouseX,z:max(0,z)}); bedPoints.sort((a,b)=>a.x-b.x);
+      updateBedBuffer(); updateBedThumb(); return;
     }
-    
-    if (closestIdx >= 0) {
-      activeXSection = closestIdx;
-      let pt = bedPoints[closestIdx];
-      let xStripW = 60;
-      let sx = pt.x - xStripW / 2;
-      if (mouseX >= sx && mouseX <= sx + xStripW && mouseY < stripY) {
-        // Click within the vertical strip: add profile point
-        // y position in canvas → cross-channel position (bottom of canvas = bottom of strip)
-        let y = mouseY / stripY * height;
-        // x position in strip → elevation: right edge = z=0, left edge = bedMaxZ
-        let relX = (mouseX - sx) / xStripW;  // 0=left(hi), 1=right(lo)
-        let absZ = (1 - relX) * bedMaxZ;  // Map back to absolute z
-        let z = absZ - pt.z;  // Relative to base z
-        z = max(0, z);
-        
-        let xsIdx = bedXSections.findIndex(xs => xs.x === pt.x);
-        if (xsIdx < 0) {
-          bedXSections.push({ x: pt.x, points: [] });
-          xsIdx = bedXSections.length - 1;
+
+    let closestIdx=-1, closestDist=Infinity;
+    for (let i=0;i<bedPoints.length;i++) { let d=abs(mouseX-bedPoints[i].x); if(d<40&&d<closestDist){closestDist=d;closestIdx=i;} }
+    if (closestIdx>=0) {
+      activeXSection=closestIdx;
+      let pt=bedPoints[closestIdx], xStripW=60, sx=pt.x-xStripW/2;
+      let xsData=bedXSections.find(xs=>xs.x===pt.x);
+      if (xsData&&xsData.points.length>0) {
+        for (let pi=0;pi<xsData.points.length;pi++) {
+          let rp=xsData.points[pi], absZ=pt.z+rp.z, vy=rp.y/height*stripY, vx=sx+xStripW-(absZ/bedMaxZ)*xStripW;
+          if (dist(mouseX,mouseY,vx,vy)<10) { editingXSStation={stationIdx:closestIdx,pointIdx:pi}; return; }
         }
-        bedXSections[xsIdx].points.push({ y: constrain(y, 0, height), z: z });
-        bedXSections[xsIdx].points.sort((a, b) => a.y - b.y);
-        updateBedBuffer();
-        updateBedThumb();
       }
-    } else {
-      activeXSection = -1;
-    }
+      if (mouseX>=sx&&mouseX<=sx+xStripW&&mouseY<stripY) {
+        let y=mouseY/stripY*height, relX=(mouseX-sx)/xStripW, absZ=(1-relX)*bedMaxZ, z=max(0,absZ-pt.z);
+        let xsIdx=bedXSections.findIndex(xs=>xs.x===pt.x);
+        if (xsIdx<0) { bedXSections.push({x:pt.x,points:[]}); xsIdx=bedXSections.length-1; }
+        bedXSections[xsIdx].points.push({y:constrain(y,0,height),z}); bedXSections[xsIdx].points.sort((a,b)=>a.y-b.y);
+        updateBedBuffer(); updateBedThumb();
+      }
+    } else { activeXSection=-1; }
     return;
   }
 
   let hit = hitTestObstacle(mouseX, mouseY);
+  if (hit>=0) { selectedIdx=hit; ghostRotation=obstacles[hit].rotation; ghostType=obstacles[hit].type; dragging=true; dragOffX=obstacles[hit].x-mouseX; dragOffY=obstacles[hit].y-mouseY; }
+  else { addObstacle(mouseX,mouseY,ghostType,ghostRotation); }
+}
 
-  if (hit >= 0) {
-    // Select existing obstacle
-    selectedIdx = hit;
-    ghostRotation = obstacles[hit].rotation;
-    ghostType = obstacles[hit].type;
-    dragging = true;
-    dragOffX = obstacles[hit].x - mouseX;
-    dragOffY = obstacles[hit].y - mouseY;
-  } else {
-    // Place new obstacle
-    addObstacle(mouseX, mouseY, ghostType, ghostRotation);
+function mouseDragged(event) {
+  if (event&&event.target) { let t=event.target; if(t.closest('#sidebar')||t.id==='bed-thumb') return; }
+  if (bedMode) {
+    let stripH=160,stripY=height-stripH,bedMaxZ=160;
+    if (editingLongPt>=0&&editingLongPt<bedPoints.length) {
+      let z=(stripY+stripH-mouseY)/stripH*bedMaxZ; bedPoints[editingLongPt].z=max(0,z);
+      updateBedBuffer(); updateBedThumb(); return;
+    }
+    if (editingXSStation) {
+      let si=editingXSStation.stationIdx, pi=editingXSStation.pointIdx;
+      let xsData=bedXSections.find(xs=>xs.x===bedPoints[si].x);
+      if (xsData&&pi<xsData.points.length) {
+        let xStripW=60, sx=bedPoints[si].x-xStripW/2;
+        let relX=constrain((mouseX-sx)/xStripW,0,1), absZ=(1-relX)*bedMaxZ;
+        xsData.points[pi].z=max(0,absZ-bedPoints[si].z);
+        xsData.points[pi].y=constrain(mouseY/stripY*height,0,height);
+        updateBedBuffer(); updateBedThumb();
+      }
+      return;
+    }
+    return;
   }
+  if (dragging&&selectedIdx>=0) { obstacles[selectedIdx].x=mouseX+dragOffX; obstacles[selectedIdx].y=mouseY+dragOffY; }
 }
 
-function mouseDragged() {
-  if (dragging && selectedIdx >= 0) {
-    obstacles[selectedIdx].x = mouseX + dragOffX;
-    obstacles[selectedIdx].y = mouseY + dragOffY;
-  }
-}
-
-function mouseReleased() {
-  dragging = false;
-}
+function mouseReleased() { dragging=false; editingLongPt=-1; editingXSStation=null; }
 
 function mouseWheel(event) {
-  let delta = event.delta > 0 ? 5 : -5;
-  ghostRotation = (ghostRotation + delta) % 360;
-  if (ghostRotation < 0) ghostRotation += 360;
-
-  if (selectedIdx >= 0) {
-    obstacles[selectedIdx].rotation = ghostRotation;
-  }
+  let delta=event.delta>0?5:-5;
+  ghostRotation=(ghostRotation+delta)%360; if(ghostRotation<0)ghostRotation+=360;
+  if (selectedIdx>=0) obstacles[selectedIdx].rotation=ghostRotation;
   return false;
 }
 
 function keyPressed() {
-  if (key === ' ') {
-    paused = !paused;
-  } else if (key === 'f' || key === 'F') {
-    showFlow = !showFlow;
-  } else if (key === 'g' || key === 'G') {
-    showGrid = !showGrid;
-  } else if (key === 'h' || key === 'H') {
-    showHelp = !showHelp;
-  } else if (key === '1') {
-    ghostType = 'circle';
-  } else if (key === '2') {
-    ghostType = 'square';
-  } else if (key === '3') {
-    ghostSize = max(20, ghostSize - 5);
-  } else if (key === '4') {
-    ghostSize = min(100, ghostSize + 5);
-  } else if ((key === 'Backspace' || key === 'Delete') && selectedIdx >= 0) {
-    deleteObstacle(selectedIdx);
-    selectedIdx = -1;
-  } else if (key === 'Backspace' || key === 'Delete') {
-    // In bed mode, remove last point
-    if (bedMode && bedPoints.length > 0) {
-      bedPoints.pop();
-      updateBedBuffer();
-      updateBedThumb();
-    }
-  } else if (key === 'Escape') {
-    selectedIdx = -1;
-    dragging = false;
-    if (bedMode) bedMode = false;
-  } else if (key === 'm' || key === 'M') {
-    bedMode = !bedMode;
+  if (key===' ') { paused=!paused; }
+  else if (key==='f'||key==='F') { showFlow=!showFlow; }
+  else if (key==='g'||key==='G') { showGrid=!showGrid; }
+  else if (key==='h'||key==='H') { showHelp=!showHelp; }
+  else if (key==='1') { ghostType='circle'; }
+  else if (key==='2') { ghostType='square'; }
+  else if (key==='3') { ghostSize=max(20,ghostSize-5); }
+  else if (key==='4') { ghostSize=min(100,ghostSize+5); }
+  else if ((key==='Backspace'||key==='Delete')&&selectedIdx>=0) { deleteObstacle(selectedIdx); selectedIdx=-1; }
+  else if (key==='Backspace'||key==='Delete') {
     if (bedMode) {
-      paused = true;  // Pause sim while drawing bed
+      if (activeXSection>=0) {
+        let xsData=bedXSections.find(xs=>xs.x===bedPoints[activeXSection].x);
+        if (xsData&&xsData.points.length>0) { xsData.points.pop(); if(xsData.points.length===0)bedXSections=bedXSections.filter(xs=>xs.x!==bedPoints[activeXSection].x); updateBedBuffer(); updateBedThumb(); return; }
+      }
+      if (bedPoints.length>0) { bedPoints.pop(); updateBedBuffer(); updateBedThumb(); }
+      return;
     }
-  } else if (key === 's' || key === 'S') {
-    saveCanvas('sediment-' + floor(simTime), 'png');
-  } else if (key === 'b' || key === 'B') {
-    bakeToOpenFOAM();
-  } else if (key === 'r' || key === 'R') {
-    // Reset
-    depoBuffer.clear();
-    deposited = [];
-    initParticles();
-    simTime = 0;
   }
+  else if (key==='Escape') { selectedIdx=-1; dragging=false; if(bedMode)bedMode=false; }
+  else if (key==='m'||key==='M') { bedMode=!bedMode; if(bedMode)paused=true; }
+  else if (key==='s'||key==='S') { saveCanvas('sediment-'+floor(simTime),'png'); }
+  else if (key==='b'||key==='B') { bakeToOpenFOAM(); }
+  else if (key==='r'||key==='R') { depoBuffer.clear(); deposited=[]; initParticles(); simTime=0; }
   return false;
 }
 
 // ─────────────────────────────────────────────
 // OPENFOAM BRIDGE
 // ─────────────────────────────────────────────
-
 const BRIDGE_URL = 'http://localhost:8090';
 let baking = false;
 let comparisonData = null;
 let showComparison = false;
 
-function renderComparison(ofGrid) {
-  comparisonData = ofGrid;
-  showComparison = true;
-  drawComparison();
-}
+function renderComparison(ofGrid) { comparisonData=ofGrid; showComparison=true; drawComparison(); }
 
 function drawComparison() {
-  if (!showComparison || !comparisonData) return;
-  
-  const ofNx = comparisonData.nx || 160;
-  const ofNy = comparisonData.ny || 90;
-  const ofMag = comparisonData.mag;
-  const ofMax = comparisonData.mag_max;
-  
-  // Build Stam velocity magnitude from u[], v[] (always 160×90)
-  const stamMag = [];
-  let stamMax = 0;
-  for (let j = 1; j <= NY; j++) {
-    for (let i = 1; i <= NX; i++) {
-      const idx = IX(i, j);
-      const spd = Math.sqrt(u[idx]*u[idx] + v[idx]*v[idx]);
-      stamMag.push(spd);
-      if (spd > stamMax) stamMax = spd;
-    }
-  }
-  
-  // Shared color scale
-  const scaleMax = Math.max(stamMax, ofMax * 0.6);
-  
-  // Create overlay canvas
-  let overlay = document.getElementById('comparison-canvas');
-  if (!overlay) {
-    overlay = document.createElement('canvas');
-    overlay.id = 'comparison-canvas';
-    overlay.style.cssText = 'position:fixed;bottom:0;left:0;z-index:15;border-top:1px solid rgba(255,255,255,0.1);';
-    document.body.appendChild(overlay);
-  }
-  
-  const cw = Math.min(window.innerWidth, 1280);
-  const ch = 200;
-  overlay.width = cw;
-  overlay.height = ch;
-  overlay.style.width = cw + 'px';
-  overlay.style.height = ch + 'px';
-  
-  const ctx = overlay.getContext('2d');
-  const halfW = Math.floor(cw / 2);
-  
-  // Stam uses NX×NY grid, OF uses ofNx×ofNy
-  const stamCellW = halfW / NX;
-  const stamCellH = ch / NY;
-  const ofCellW = halfW / ofNx;
-  const ofCellH = ch / ofNy;
-  
-  function velColor(t) {
-    t = Math.max(0, Math.min(1, Math.pow(t, 0.55)));
-    let r, g, b;
-    if (t < 0.25) { r=0; g=t*4; b=1; }
-    else if (t < 0.5) { r=0; g=1; b=1-(t-0.25)*4; }
-    else if (t < 0.75) { r=(t-0.5)*4; g=1; b=0; }
-    else { r=1; g=1-(t-0.75)*4; b=0; }
-    return `rgb(${Math.floor(r*255)},${Math.floor(g*255)},${Math.floor(b*255)})`;
-  }
-  
-  // Left: Stam (NX×NY)
-  for (let j = 0; j < NY; j++) {
-    for (let i = 0; i < NX; i++) {
-      const t = stamMag[j * NX + i] / scaleMax;
-      ctx.fillStyle = velColor(t);
-      ctx.fillRect(i * stamCellW, j * stamCellH, stamCellW + 0.5, stamCellH + 0.5);
-    }
-  }
-  
-  // Right: OpenFOAM (ofNx×ofNy)
-  for (let j = 0; j < ofNy; j++) {
-    for (let i = 0; i < ofNx; i++) {
-      const ofIdx = j * ofNx + i;
-      const t = (ofMag[ofIdx] || 0) / (scaleMax * 1.67);
-      ctx.fillStyle = velColor(t);
-      ctx.fillRect(halfW + i * ofCellW, j * ofCellH, ofCellW + 0.5, ofCellH + 0.5);
-    }
-  }
-  
-  // Divider
-  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(halfW, 0);
-  ctx.lineTo(halfW, ch);
-  ctx.stroke();
-  
-  // Labels
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.font = '11px monospace';
-  ctx.fillText('← Stam (live)', 8, 14);
-  ctx.fillText('OpenFOAM (baked) →', halfW + 8, 14);
-  ctx.fillText(stamMax.toFixed(1) + ' g.u.', 8, ch - 6);
-  ctx.fillText(ofMax.toFixed(1) + ' m/s', halfW + 8, ch - 6);
+  if (!showComparison||!comparisonData) return;
+  const ofNx=comparisonData.nx||160, ofNy=comparisonData.ny||90, ofMag=comparisonData.mag, ofMax=comparisonData.mag_max;
+  const stamMag=[]; let stamMax=0;
+  for (let j=1;j<=NY;j++) for(let i=1;i<=NX;i++){let idx=IX(i,j),spd=sqrt(u[idx]*u[idx]+v[idx]*v[idx]);stamMag.push(spd);if(spd>stamMax)stamMax=spd;}
+  const maxVal=max(ofMax,stamMax,0.01);
+  const ofW=width*0.45, ofH=ofW*ofNy/ofNx, stamW=width*0.45, stamH=stamW*NY/NX, panelY=10;
+  noStroke();
+  for (let j=0;j<ofNy;j++) for(let i=0;i<ofNx;i++){let v=ofMag[j*ofNx+i]/maxVal;fill(lerpColor(color(10,10,30),color(255,200,60),v));rect(panelY+ofW+10+i*stamW/stamNx,panelY+j*stamH/stamNy,stamW/stamNx+1,stamH/stamNy+1);}
+  for (let j=0;j<NY;j++) for(let i=0;i<NX;i++){let v=stamMag[j*NX+i]/maxVal;fill(lerpColor(color(10,10,30),color(60,200,255),v));rect(panelY+ofW+20+i*stamW/NX,panelY+j*stamH/NY,stamW/NX+1,stamH/NY+1);}
+  fill(255,255,255,200); textAlign(CENTER,TOP); textSize(10);
+  text('OpenFOAM',panelY,panelY+stamH+4); text('Stam',panelY+ofW+20,panelY+stamH+4);
 }
 
 async function bakeToOpenFOAM() {
-  if (baking) return;
-  baking = true;
-  
-  const btn = document.getElementById('bake-btn');
-  const result = document.getElementById('bake-result');
-  btn.textContent = '⟳ BAKING...';
-  btn.className = 'baking';
-  result.innerHTML = 'sending state...';
-  
-  // Collect state
-  const state = {
-    obstacles: obstacles.map(ob => ({
-      type: ob.type,
-      x: ob.x,
-      y: ob.y,
-      size: ob.size,
-      rotation: ob.rotation
-    })),
-    inflow: INFLOW,
-    width: width,
-    height: height,
-    depo_png: depoBuffer.elt.toDataURL('image/png'),  // Bed morphology
-    bed_profile: bedPoints,  // User-drawn bed longitudinal section
-    bed_xsections: bedXSections  // Transverse cross-section profiles
-  };
-  
+  if (baking) return; baking=true;
+  const btn=document.getElementById('bake-btn'), result=document.getElementById('bake-result');
+  btn.textContent='⟳ BAKING...'; btn.className='baking'; result.innerHTML='sending state...';
+  const state={obstacles:obstacles.map(o=>({type:o.type,x:o.x,y:o.y,size:o.size,rotation:o.rotation})),inflow:inflowVel,width,height,depo_png:depoBuffer.elt.toDataURL('image/png'),bed_profile:bedPoints,bed_xsections:bedXSections};
   try {
-    // POST state to bridge
-    const resp = await fetch(BRIDGE_URL + '/bake', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state)
-    });
-    const data = await resp.json();
-    
-    if (data.error) {
-      result.innerHTML = '<span style="color:#f66">error: ' + data.error + '</span>';
-      baking = false;
-      btn.textContent = '⚙ BAKE';
-      btn.className = '';
-      return;
-    }
-    
-    // Poll until complete
-    let done = false;
-    while (!done) {
-      await new Promise(r => setTimeout(r, 500));
-      const statusResp = await fetch(BRIDGE_URL + '/status');
-      const status = await statusResp.json();
-      
-      result.innerHTML = status.status + ' <span style="color:#888">' + status.progress + '%</span>';
-      
-      if (status.status === 'complete') {
-        done = true;
-        const r = status.result;
-        if (r) {
-          const pctRev = (r.reverse_cells / r.n_cells * 100).toFixed(1);
-          result.innerHTML = 
-            'OF cells: <span class="of-val">' + r.n_cells + '</span><br>' +
-            'U<sub>x</sub>: <span class="of-val">' + r.ux_min.toFixed(2) + '</span> … <span class="of-val">' + r.ux_max.toFixed(2) + '</span> m/s<br>' +
-            'mean: <span class="of-val">' + r.ux_mean.toFixed(2) + '</span> m/s<br>' +
-            'reverse: <span class="of-val">' + r.reverse_cells + ' cells (' + pctRev + '%)</span>';
-          // Render side-by-side comparison
+    const resp=await fetch(BRIDGE_URL+'/bake',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+    const data=await resp.json();
+    if (data.error) { result.innerHTML='<span style="color:#f66">error: '+data.error+'</span>'; baking=false; btn.textContent='⚙ BAKE'; btn.className=''; return; }
+    let done=false;
+    while(!done) {
+      await new Promise(r=>setTimeout(r,500));
+      const statusResp=await fetch(BRIDGE_URL+'/status'), status=await statusResp.json();
+      result.innerHTML=status.status+' <span style="color:#888">'+status.progress+'%</span>';
+      if (status.status==='complete') {
+        done=true; const r=status.result;
+        if (r) { const pctRev=(r.reverse_cells/r.n_cells*100).toFixed(1);
+          result.innerHTML='OF cells: <span class="of-val">'+r.n_cells+'</span><br>U<sub>x</sub>: <span class="of-val">'+r.ux_min.toFixed(2)+'</span> … <span class="of-val">'+r.ux_max.toFixed(2)+'</span> m/s<br>mean: <span class="of-val">'+r.ux_mean.toFixed(2)+'</span> m/s<br>reverse: <span class="of-val">'+r.reverse_cells+' cells ('+pctRev+'%)</span>';
           if (r.grid) renderComparison(r.grid);
         }
-      } else if (status.status === 'failed') {
-        done = true;
-        result.innerHTML = '<span style="color:#f66">failed: ' + (status.error || 'unknown') + '</span>';
-      }
+      } else if (status.status==='failed') { done=true; result.innerHTML='<span style="color:#f66">failed: '+(status.error||'unknown')+'</span>'; }
     }
-  } catch (e) {
-    result.innerHTML = '<span style="color:#f66">connection failed<br>is bridge server running?</span>';
-  }
-  
-  baking = false;
-  btn.textContent = '⚙ BAKE';
-  btn.className = '';
-}
-
-function windowResized() {
-  // Resize canvas, preserve simulation state
-  let oldDepo = depoBuffer;
-  resizeCanvas(windowWidth, windowHeight);
-  cellW = width / NX;
-  cellH = height / NY;
-
-  // Resize deposition buffer
-  depoBuffer = createGraphics(width, height);
-  if (oldDepo) {
-    depoBuffer.image(oldDepo, 0, 0, width, height);
-    oldDepo.remove();
-  }
-  
-  // Rebuild bed surface
-  let oldBed = bedSurface;
-  bedSurface = createGraphics(width, height);
-  bedSurface.background(0, 0);
-  if (oldBed) oldBed.remove();
-  updateBedBuffer();
-  updateBedThumb();
+  } catch(e) { result.innerHTML='<span style="color:#f66">connection failed<br>is bridge server running?</span>'; }
+  baking=false; btn.textContent='⚙ BAKE'; btn.className='';
 }
 </script>
 </body>
