@@ -79,6 +79,7 @@ class JobManager:
             # Check for bed morphology
             depo_png = state_dict.get("depo_png", "")
             bed_profile = state_dict.get("bed_profile", [])
+            bed_xsections = state_dict.get("bed_xsections", [])
             has_bed = len(bed_profile) >= 2  # Need at least 2 points for a profile
             
             of_prefix = "source /usr/share/openfoam/etc/bashrc && "
@@ -97,7 +98,7 @@ class JobManager:
                 # Displace bottom by bed heightfield
                 self._update(job_id, "displacing bed", 20)
                 from displace_bed import displace_bottom
-                displace_bottom(CASE_DIR, depo_png, bed_profile=bed_profile)
+                displace_bottom(CASE_DIR, depo_png, bed_profile=bed_profile, bed_xsections=bed_xsections)
             else:
                 # Standard blockMesh with flat bottom
                 self._update(job_id, "blockMesh", 20)

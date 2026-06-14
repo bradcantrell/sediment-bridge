@@ -58,62 +58,113 @@ def decode_png_heights(b64_data: str) -> list:
 
 
 def profile_to_heights(bed_profile: list, nx: int, ny: int, domain_w: float, domain_h: float,
-                       max_depth: float = 0.02, heights_png: list = None) -> list:
-    """Convert a bed profile (list of {x, z} px points) to a 2D heightfield [ny][nx].
-    The profile defines z(x) in pixel space; we interpolate to the full grid.
+                       max_depth: float = 0.02, heights_png: list = None,
+                       bed_xsections: list = None) -> list:
+    """Convert bed profile (longitudinal + transverse) to a 2D heightfield [ny][nx].
+    
+    bed_profile: list of {x, z} pixel coords for longitudinal section
+    bed_xsections: list of {x, points: [{y, z}]} for transverse profiles at each station
     PNG deposition data is added on top if provided.
     Returns list of lists [ny][nx] with heights in meters.
     """
     points = bed_profile  # [{x: px, z: px}]
+    xsections = bed_xsections or []
+    
     if len(points) < 2:
-        # No profile — use PNG only or flat
         if heights_png:
             return [[heights_png[y][x] * max_depth for x in range(nx)] for y in range(ny)]
         return [[0.0] * nx for _ in range(ny)]
     
-    # Sort by x
     sorted_pts = sorted(points, key=lambda p: p['x'])
     
-    # Build interpolated profile z(x) at mesh resolution
-    profile_z = [0.0] * nx
-    for i in range(nx):
-        x_px = i * domain_w / nx  # mesh x in meters → back to px for profile lookup
-        # Find bracketing points
-        if x_px <= sorted_pts[0]['x']:
-            z_px = sorted_pts[0]['z']
-        elif x_px >= sorted_pts[-1]['x']:
-            z_px = sorted_pts[-1]['z']
-        else:
-            # Linear interpolation
-            for k in range(len(sorted_pts) - 1):
-                if sorted_pts[k]['x'] <= x_px <= sorted_pts[k + 1]['x']:
-                    t = (x_px - sorted_pts[k]['x']) / (sorted_pts[k + 1]['x'] - sorted_pts[k]['x'])
-                    z_px = sorted_pts[k]['z'] + t * (sorted_pts[k + 1]['z'] - sorted_pts[k]['z'])
-                    break
-        # Convert px to meters
-        profile_z[i] = z_px * (domain_h / 577.0)  # Scale from px to meters using domain height
+    # Build per-station y→z interpolators from transverse data
+    station_map = {}  # x → function(y_px) → z_px (absolute)
+    for xs in xsections:
+        sx = xs['x']
+        pts_list = sorted(xs.get('points', []), key=lambda p: p['y'])
+        if len(pts_list) < 2:
+            continue  # Skip stations with no transverse data
+        
+        # Find the base profile z at this station
+        base_z = 0
+        for pt in sorted_pts:
+            if abs(pt['x'] - sx) < 0.5:
+                base_z = pt['z']
+                break
+        
+        def make_interpolator(pts, base):
+            def interp(y_px):
+                if y_px <= pts[0]['y']: return base + pts[0]['z']
+                if y_px >= pts[-1]['y']: return base + pts[-1]['z']
+                for k in range(len(pts) - 1):
+                    if pts[k]['y'] <= y_px <= pts[k + 1]['y']:
+                        t = (y_px - pts[k]['y']) / (pts[k + 1]['y'] - pts[k]['y'])
+                        rel_z = pts[k]['z'] + t * (pts[k + 1]['z'] - pts[k]['z'])
+                        return base + rel_z
+                return base
+            return interp
+        station_map[sx] = make_interpolator(pts_list, base_z)
     
-    # Build full heightfield
+    # Build interpolated profile z(x) at mesh resolution
+    canvas_px_h = 577  # Reference canvas height in px (for y→px mapping)
+    
     bed = [[0.0] * nx for _ in range(ny)]
     for j in range(ny):
+        # Map mesh y index to canvas pixel y (for transverse lookup)
+        y_px = j * canvas_px_h / ny
+        
         for i in range(nx):
-            h = profile_z[i]  # Base profile (varies only with x)
+            x_px = i * domain_w / nx  # mesh x in meters → back to px
+            
+            # Longitudinal interpolation
+            if x_px <= sorted_pts[0]['x']:
+                z_long = sorted_pts[0]['z']
+            elif x_px >= sorted_pts[-1]['x']:
+                z_long = sorted_pts[-1]['z']
+            else:
+                z_long = sorted_pts[0]['z']
+                for k in range(len(sorted_pts) - 1):
+                    if sorted_pts[k]['x'] <= x_px <= sorted_pts[k + 1]['x']:
+                        t = (x_px - sorted_pts[k]['x']) / (sorted_pts[k + 1]['x'] - sorted_pts[k]['x'])
+                        z_long = sorted_pts[k]['z'] + t * (sorted_pts[k + 1]['z'] - sorted_pts[k]['z'])
+                        break
+            
+            # Apply transverse variation at nearest stations
+            z_transverse = z_long
+            if station_map:
+                # Find two nearest stations with transverse data, interpolate in x
+                station_xs = sorted(station_map.keys())
+                if x_px <= station_xs[0]:
+                    z_transverse = station_map[station_xs[0]](y_px)
+                elif x_px >= station_xs[-1]:
+                    z_transverse = station_map[station_xs[-1]](y_px)
+                else:
+                    for k in range(len(station_xs) - 1):
+                        if station_xs[k] <= x_px <= station_xs[k + 1]:
+                            t = (x_px - station_xs[k]) / (station_xs[k + 1] - station_xs[k])
+                            za = station_map[station_xs[k]](y_px)
+                            zb = station_map[station_xs[k + 1]](y_px)
+                            z_transverse = za + t * (zb - za)
+                            break
+            
+            h = z_transverse * (domain_h / canvas_px_h)
             if heights_png:
-                h += heights_png[j][i] * max_depth  # Add deposition detail
+                h += heights_png[j][i] * max_depth
             bed[j][i] = h
     
     return bed
 
 
 def displace_bottom(case_dir: Path, b64_png: str, max_depth: float = 0.02,
-                    bed_profile: list = None):
+                    bed_profile: list = None, bed_xsections: list = None):
     """Read polyMesh/points, displace bottom vertices by bed heightfield.
     
     Args:
         case_dir: OpenFOAM case directory (with constant/polyMesh/points)
         b64_png: Deposition buffer as base64 PNG (can be empty string)
         max_depth: Maximum deposition depth in meters
-        bed_profile: List of {x, z} pixel coords for user-drawn bed profile
+        bed_profile: List of {x, z} pixel coords for user-drawn longitudinal bed profile
+        bed_xsections: List of {x, points: [{y, z}]} for transverse profiles
     """
     points_file = case_dir / "constant" / "polyMesh" / "points"
     if not points_file.exists():
@@ -189,7 +240,8 @@ def displace_bottom(case_dir: Path, b64_png: str, max_depth: float = 0.02,
     if bed_profile and len(bed_profile) >= 2:
         heights_grid = profile_to_heights(bed_profile, nx_mesh, ny_mesh,
                                           xmax - xmin, ymax - ymin,
-                                          max_depth, png_heights)
+                                          max_depth, png_heights,
+                                          bed_xsections=bed_xsections)
     elif png_heights:
         # PNG only, resample to mesh resolution
         heights_grid = [[0.0] * nx_mesh for _ in range(ny_mesh)]

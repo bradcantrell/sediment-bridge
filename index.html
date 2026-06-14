@@ -24,7 +24,7 @@
     #hud .warn { color: rgba(255,120,80,0.8); }
 
     #bake-btn {
-      position: fixed; top: 16px; right: 16px;
+      position: fixed; top: 168px; left: 16px;
       font-family: 'Courier New', monospace;
       font-size: 13px; color: #fa0; background: rgba(255,255,255,0.06);
       border: 1px solid rgba(255,200,100,0.3);
@@ -33,6 +33,27 @@
     }
     #bake-btn:hover { background: rgba(255,200,100,0.15); border-color: #fa0; }
     #bake-btn.baking { color: rgba(255,255,255,0.4); border-color: rgba(255,255,255,0.15); pointer-events: none; }
+
+    #bed-thumb {
+      position: fixed; top: 12px; right: 16px;
+      z-index: 15; cursor: grab;
+      border: 1px solid rgba(255,200,100,0.12);
+      border-radius: 3px;
+    }
+    #bed-thumb:active { cursor: grabbing; }
+
+    #z-scale {
+      position: fixed; top: 192px; right: 16px;
+      width: 250px; z-index: 16;
+      -webkit-appearance: none; appearance: none;
+      height: 4px; background: rgba(255,255,255,0.08);
+      border-radius: 2px; outline: none; cursor: ew-resize;
+    }
+    #z-scale::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 10px; height: 10px; border-radius: 50%;
+      background: rgba(255,200,100,0.6); cursor: ew-resize;
+    }
 
     #bake-result {
       position: fixed; bottom: 50px; right: 16px;
@@ -64,8 +85,10 @@
     &phi;: <span class="val" id="rot">0</span>&deg;<br>
     <span class="warn" id="paused"></span>
   </div>
-  <div id="help">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; M bed &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
   <button id="bake-btn" onclick="bakeToOpenFOAM()">⚙ BAKE</button>
+  <canvas id="bed-thumb" width="250" height="175"></canvas>
+  <input type="range" id="z-scale" min="5" max="60" value="28" step="1" title="z scale">
+  <div id="help">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; M bed &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
   <div id="bake-result"></div>
 
 <script>
@@ -107,6 +130,8 @@ let particles = [];
 let deposited = [];
 
 let depoBuffer;
+let bedSurface;    // Rendered bed topography overlay
+let bedThumb;      // Isometric thumbnail canvas context
 let gridLayer;
 
 let paused = false;
@@ -121,16 +146,47 @@ let bedPoints = [];  // [{x, z}] in pixel coords, z=0 at bottom, positive upward
 let bedXSections = [];  // [{x, points: [{y, z}]}] — cross-section profiles at each station
 let activeXSection = -1;  // Index of cross-section being edited, or -1
 
-function bedZ(x) {
-  // Return bed elevation z at pixel x (interpolated from bedPoints)
+// Thumbnail rotation state
+let thumbAngleX = 30;   // Degrees — rotation around vertical (spine direction spread)
+let thumbAngleY = 30;   // Degrees — elevation angle
+let thumbDragging = false;
+let thumbDragLast = { x: 0, y: 0 };
+
+function getStationZ(station, y) {
+  // Return absolute bed elevation at a station for a given canvas y
+  // Uses the station's cross-section profile (bedXSections) if available
+  let xsData = bedXSections.find(xs => xs.x === station.x);
+  if (!xsData || xsData.points.length < 2) return station.z; // No transverse data → flat extrusion
+
+  let pts = [...xsData.points].sort((a, b) => a.y - b.y);
+  if (y <= pts[0].y) return station.z + pts[0].z;
+  if (y >= pts[pts.length - 1].y) return station.z + pts[pts.length - 1].z;
+
+  for (let k = 0; k < pts.length - 1; k++) {
+    if (pts[k].y <= y && y <= pts[k + 1].y) {
+      let t = (y - pts[k].y) / (pts[k + 1].y - pts[k].y);
+      let relZ = pts[k].z + t * (pts[k + 1].z - pts[k].z);
+      return station.z + relZ;
+    }
+  }
+  return station.z;
+}
+
+function bedZ(x, y) {
+  // Return bed elevation z at canvas position (x, y)
+  // Interpolates: longitudinal (bedPoints) × transverse (bedXSections)
   // Returns 0 if no profile defined
   if (bedPoints.length < 2) return 0;
-  if (x <= bedPoints[0].x) return bedPoints[0].z;
-  if (x >= bedPoints[bedPoints.length - 1].x) return bedPoints[bedPoints.length - 1].z;
+
+  if (x <= bedPoints[0].x) return getStationZ(bedPoints[0], y);
+  if (x >= bedPoints[bedPoints.length - 1].x) return getStationZ(bedPoints[bedPoints.length - 1], y);
+
   for (let k = 0; k < bedPoints.length - 1; k++) {
     if (bedPoints[k].x <= x && x <= bedPoints[k + 1].x) {
       let t = (x - bedPoints[k].x) / (bedPoints[k + 1].x - bedPoints[k].x);
-      return bedPoints[k].z + t * (bedPoints[k + 1].z - bedPoints[k].z);
+      let zA = getStationZ(bedPoints[k], y);
+      let zB = getStationZ(bedPoints[k + 1], y);
+      return zA + t * (zB - zA);
     }
   }
   return 0;
@@ -455,17 +511,33 @@ function updateParticles() {
     p.vx = vel.vx;
     p.vy = vel.vy;
 
-    // ── Bed influence (plan view: affects flow depth, no collision) ──
+    // ── Bed influence: channel containment + proximity settling ──
+    // The bed defines a channel. Particles outside it get pushed back in.
+    // Within the channel, settling increases on higher bed (shallower flow).
+    let bedHere = 0;
     if (bedPoints.length >= 2) {
-      let bz = bedZ(p.x);  // Bed elevation at this x (z-scale, not canvas y)
-      let bedMaxZ = 160;
-      // Mass conservation: higher bed → shallower flow → faster velocity
-      // Reference depth is bedMaxZ (flat = max depth)
-      let effectiveDepth = bedMaxZ - bz;
-      if (effectiveDepth > 5 && bedMaxZ > 0) {
-        let scale = bedMaxZ / effectiveDepth;
-        p.vx *= scale;
-        p.vy *= scale;
+      bedHere = bedZ(p.x, p.y);  // 2D bed elevation at particle position
+
+      // Containment: if particle is outside bed area (z near 0), push toward channel
+      let bedMinZ = 5;  // Threshold — below this, particle is "out of channel"
+      if (bedHere < bedMinZ) {
+        // Sample bed gradient to find direction toward channel
+        let bedAbove = bedZ(p.x, max(0, p.y - 4));
+        let bedBelow = bedZ(p.x, min(height, p.y + 4));
+        // Push toward higher bed elevation
+        if (bedAbove > bedBelow) {
+          p.vy -= cellH * 0.8;
+        } else if (bedBelow > bedAbove) {
+          p.vy += cellH * 0.8;
+        }
+        // Also sample x-gradient
+        let bedLeft = bedZ(max(0, p.x - 4), p.y);
+        let bedRight = bedZ(min(width, p.x + 4), p.y);
+        if (bedLeft > bedRight) {
+          p.vx -= cellW * 0.3;
+        } else if (bedRight > bedLeft) {
+          p.vx += cellW * 0.3;
+        }
       }
     }
 
@@ -492,9 +564,11 @@ function updateParticles() {
     let speed = mag(p.vx, p.vy) / ((cellW + cellH) / 2);
 
     // Settle — only if particle has existed long enough AND cleared the injection zone
+    // Bed proximity: higher bed elevation → higher settle probability (shallower = more deposition)
     let age = simTime - (p.born || 0);
-    if (p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE && speed < SETTLE_THRESH && random() < SETTLE_PROB) {
-      deposited.push({ x: p.x, y: p.y });
+    let bedSettleBoost = bedHere > 0 ? 1.0 + (bedHere / 160) * 4.0 : 1.0;  // Up to 5× at max bed height
+    if (p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE && speed < SETTLE_THRESH && random() < SETTLE_PROB * bedSettleBoost) {
+      deposited.push({ x: p.x, y: p.y, z: bedHere });
       particles.splice(i, 1);
     }
   }
@@ -506,6 +580,10 @@ function updateParticles() {
     let speed = mag(vel.vx, vel.vy) / ((cellW + cellH) / 2);
 
     if (speed > EROSION_THRESH && random() < EROSION_PROB) {
+      // Erode less on higher bed (deposits are more stable in shallows)
+      let bedHere2 = bedPoints.length >= 2 ? bedZ(d.x, d.y) : 0;
+      let erosionResist = bedHere2 > 0 ? 1.0 / (1.0 + (bedHere2 / 160) * 2.0) : 1.0;  // Down to ~0.33× at max bed
+      if (random() > erosionResist) continue;  // Skip erosion due to bed stability
       // Erode: draw dark spot, reactivate
       depoBuffer.noStroke();
       depoBuffer.fill(10, 10, 20, 80);
@@ -523,9 +601,32 @@ function updateParticles() {
 
   // Respawn missing particles at inflow
   while (particles.length + deposited.length < N_PARTICLES) {
+    let spawnX = random(cellW, cellW * 3);
+    let spawnY;
+
+    // If bed defined, spawn within the channel at this x
+    if (bedPoints.length >= 2) {
+      // Scan y to find channel bounds (where bedZ > 5)
+      let yLo = cellH, yHi = height - cellH;
+      let found = false;
+      for (let sy = cellH; sy < height - cellH; sy += 4) {
+        if (bedZ(spawnX, sy) > 5) {
+          if (!found) { yLo = sy; found = true; }
+          yHi = sy;
+        }
+      }
+      if (found && yHi > yLo) {
+        spawnY = random(yLo, yHi);
+      } else {
+        spawnY = random(cellH, height - cellH);  // Fallback
+      }
+    } else {
+      spawnY = random(cellH, height - cellH);
+    }
+
     particles.push({
-      x: random(cellW, cellW * 3),
-      y: random(cellH, height - cellH),
+      x: spawnX,
+      y: spawnY,
       vx: random(INFLOW * 0.5, INFLOW * 1.5) * cellW,
       vy: random(-0.2, 0.2) * cellH,
       born: simTime
@@ -680,6 +781,312 @@ function drawParticles() {
   for (let p of particles) {
     ellipse(p.x, p.y, 3, 3);
   }
+}
+
+// ── Bed surface render ──
+function updateBedBuffer() {
+  // Redraw bed topography overlay — sampled heatmap + contour lines
+  bedSurface.clear();
+  if (bedPoints.length < 2) return;
+
+  let bedMaxZ = 160;
+  let step = 8;  // Sample every N pixels for gradient
+
+  // ── Gradient fill ──
+  bedSurface.noStroke();
+  for (let px = 0; px < width; px += step) {
+    for (let py = 0; py < height; py += step) {
+      let z = bedZ(px, py);
+      if (z <= 0) continue;
+      let t = z / bedMaxZ;
+      let r = 40 + t * 80;
+      let g = 20 + t * 35;
+      let b = 10 + t * 15;
+      let a = 10 + t * 40;
+      bedSurface.fill(r, g, b, a);
+      bedSurface.rect(px, py, step, step);
+    }
+  }
+
+  // ── Contour lines ──
+  let cStep = 2;  // Fine sampling for smooth contours
+  let levels = [20, 40, 60, 80, 100, 120, 140];
+
+  for (let lvl of levels) {
+    // Line alpha fades with elevation: deeper contours subtler
+    let lAlpha = 25 + (lvl / bedMaxZ) * 50;
+
+    // Horizontal scan: find crossings between adjacent x samples
+    for (let py = 0; py < height; py += cStep) {
+      let prevZ = bedZ(0, py);
+      for (let px = cStep; px < width; px += cStep) {
+        let currZ = bedZ(px, py);
+        if ((prevZ - lvl) * (currZ - lvl) < 0 && prevZ > 0 && currZ > 0) {
+          // Interpolate crossing position
+          let t = (lvl - prevZ) / (currZ - prevZ);
+          let cx = (px - cStep) + t * cStep;
+          bedSurface.stroke(255, 200, 130, lAlpha);
+          bedSurface.strokeWeight(0.5);
+          bedSurface.point(cx, py);
+        }
+        prevZ = currZ;
+      }
+    }
+
+    // Vertical scan: find crossings between adjacent y samples
+    for (let px = 0; px < width; px += cStep) {
+      let prevZ = bedZ(px, 0);
+      for (let py = cStep; py < height; py += cStep) {
+        let currZ = bedZ(px, py);
+        if ((prevZ - lvl) * (currZ - lvl) < 0 && prevZ > 0 && currZ > 0) {
+          let t = (lvl - prevZ) / (currZ - prevZ);
+          let cy = (py - cStep) + t * cStep;
+          bedSurface.stroke(255, 200, 130, lAlpha);
+          bedSurface.strokeWeight(0.5);
+          bedSurface.point(px, cy);
+        }
+        prevZ = currZ;
+      }
+    }
+  }
+}
+
+// ── Isometric bed thumbnail ──
+function updateBedThumb() {
+  let canvas = document.getElementById('bed-thumb');
+  let ctx = bedThumb;
+  let TW = canvas.width;
+  let TH = canvas.height;
+
+  ctx.clearRect(0, 0, TW, TH);
+
+  if (bedPoints.length < 2) {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.font = '10px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('no bed defined', TW/2, TH/2);
+    return;
+  }
+
+  // ── Coordinate setup ──
+  let margin = 20;
+  let viewW = TW - margin * 2;
+  let viewH = TH - margin * 2;
+  let bedMaxZ = 160;
+
+  // Rotation angles in radians
+  let ax = thumbAngleX * Math.PI / 180;  // Spin around vertical
+  let ay = thumbAngleY * Math.PI / 180;  // Elevation
+  let cosAX = Math.cos(ax), sinAX = Math.sin(ax);
+  let cosAY = Math.cos(ay), sinAY = Math.sin(ay);
+
+  // Normalize longitudinal range
+  let sortedPts = [...bedPoints].sort((a, b) => a.x - b.x);
+  let xMin = sortedPts[0].x;
+  let xMax = sortedPts[sortedPts.length - 1].x;
+  let xRange = xMax - xMin || 1;
+
+  // ── First pass: project all points to find bounding box for auto-center ──
+  function projectRaw(x_px, y_px, z_px) {
+    let nx = (x_px - xMin) / xRange - 0.5;  // -0.5..0.5 along channel
+    let ny = (y_px / height - 0.5) * 0.45;   // ±0.225 across channel
+    let zScale = parseFloat(document.getElementById('z-scale').value) / 100;
+    let nz = z_px / bedMaxZ * zScale;           // variable z exaggeration
+    // Rotate around vertical axis (ax)
+    let rx = nx * cosAX - ny * sinAX;
+    let ry = nx * sinAX + ny * cosAX;
+    // Apply elevation angle
+    let ix = rx;
+    let iy = ry * cosAY - nz * sinAY;
+    return { x: ix, y: iy, depth: ry * sinAY + nz * cosAY };  // depth for sorting
+  }
+
+  // Collect all key points
+  let allPts = [];
+  // Spine points
+  for (let pt of sortedPts) {
+    allPts.push(projectRaw(pt.x, height/2, pt.z));
+  }
+  // Rib endpoints
+  for (let xs of bedXSections) {
+    let station = sortedPts.find(p => p.x === xs.x);
+    if (!station) continue;
+    for (let rp of xs.points) {
+      let absZ = station.z + rp.z;
+      allPts.push(projectRaw(xs.x, rp.y, absZ));
+    }
+  }
+
+  // Compute bounding box
+  let bxMin = Infinity, bxMax = -Infinity, byMin = Infinity, byMax = -Infinity;
+  for (let p of allPts) {
+    if (p.x < bxMin) bxMin = p.x;
+    if (p.x > bxMax) bxMax = p.x;
+    if (p.y < byMin) byMin = p.y;
+    if (p.y > byMax) byMax = p.y;
+  }
+  let bxRange = bxMax - bxMin || 1;
+  let byRange = byMax - byMin || 1;
+  let scale = Math.min(viewW / bxRange, viewH / byRange) * 0.88;
+  let cx = (bxMin + bxMax) / 2;
+  let cy = (byMin + byMax) / 2;
+
+  // ── Final projection with auto-centering ──
+  function project(x_px, y_px, z_px) {
+    let raw = projectRaw(x_px, y_px, z_px);
+    return {
+      x: margin + viewW/2 + (raw.x - cx) * scale,
+      y: margin + viewH/2 + (raw.y - cy) * scale,
+      depth: raw.depth
+    };
+  }
+
+  // Background
+  ctx.fillStyle = 'rgba(10,12,22,0.92)';
+  ctx.fillRect(0, 0, TW, TH);
+
+  // ── Reference grid ──
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 0.5;
+  for (let gz = 0; gz <= bedMaxZ; gz += 40) {
+    let p0 = project(xMin, height/2, gz);
+    let p1 = project(xMax, height/2, gz);
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.stroke();
+  }
+
+  // ── Collect ribs with depth info for sorting ──
+  let ribs = [];
+  for (let pt of sortedPts) {
+    let xsData = bedXSections.find(xs => xs.x === pt.x);
+    if (!xsData || xsData.points.length < 2) continue;
+    let pts = [...xsData.points].sort((a, b) => a.y - b.y);
+    let ribPts = [];
+    let maxDepth = -Infinity;
+    for (let rp of pts) {
+      let absZ = pt.z + rp.z;
+      let proj = project(pt.x, rp.y, absZ);
+      ribPts.push(proj);
+      if (proj.depth > maxDepth) maxDepth = proj.depth;
+    }
+    ribs.push({ station: pt, points: ribPts, depth: maxDepth });
+  }
+
+  // Sort ribs far-to-near for wireframe mesh
+  let sortedRibs = [...ribs].sort((a, b) => a.depth - b.depth);
+
+  // ── Surface wireframe: connect adjacent ribs ──
+  // Resample ribs to shared y-grid first
+  let ySamples = 16;
+  let yGrid = [];
+  for (let yi = 0; yi <= ySamples; yi++) {
+    yGrid.push(yi / ySamples * height);
+  }
+
+  // Build resampled rib arrays
+  let sampledRibs = [];
+  for (let rib of ribs) {
+    let xsData = bedXSections.find(xs => xs.x === rib.station.x);
+    let ribPts = [...xsData.points].sort((a, b) => a.y - b.y);
+    let samples = [];
+    for (let sy of yGrid) {
+      // Interpolate z at this y
+      let zAbs = rib.station.z;
+      if (sy <= ribPts[0].y) {
+        zAbs += ribPts[0].z;
+      } else if (sy >= ribPts[ribPts.length - 1].y) {
+        zAbs += ribPts[ribPts.length - 1].z;
+      } else {
+        for (let k = 0; k < ribPts.length - 1; k++) {
+          if (ribPts[k].y <= sy && sy <= ribPts[k + 1].y) {
+            let t = (sy - ribPts[k].y) / (ribPts[k + 1].y - ribPts[k].y);
+            zAbs += ribPts[k].z + t * (ribPts[k + 1].z - ribPts[k].z);
+            break;
+          }
+        }
+      }
+      samples.push(project(rib.station.x, sy, zAbs));
+    }
+    sampledRibs.push({ station: rib.station, samples: samples, depth: rib.depth });
+  }
+
+  // Sort sampled ribs
+  sampledRibs.sort((a, b) => a.depth - b.depth);
+
+  // Draw connecting lines between adjacent ribs (ordered by station x)
+  let sampledByX = [...sampledRibs].sort((a, b) => a.station.x - b.station.x);
+  for (let ri = 0; ri < sampledByX.length - 1; ri++) {
+    let rA = sampledByX[ri];
+    let rB = sampledByX[ri + 1];
+    let avgDepth = (rA.depth + rB.depth) / 2;
+    // Farther connections → more transparent
+    let alpha = 0.08 + avgDepth * 0.14;
+    ctx.strokeStyle = `rgba(255,200,130,${alpha})`;
+    ctx.lineWidth = 0.6;
+    for (let si = 0; si < rA.samples.length; si++) {
+      ctx.beginPath();
+      ctx.moveTo(rA.samples[si].x, rA.samples[si].y);
+      ctx.lineTo(rB.samples[si].x, rB.samples[si].y);
+      ctx.stroke();
+    }
+  }
+
+  // ── Draw spine ──
+  let spinePts = [];
+  for (let pt of sortedPts) {
+    spinePts.push({ ...project(pt.x, height/2, pt.z), station: pt });
+  }
+  // Spine segments: farther ones slightly dimmer
+  for (let k = 0; k < spinePts.length - 1; k++) {
+    let pA = spinePts[k], pB = spinePts[k + 1];
+    let d = (pA.depth + pB.depth) / 2;
+    let alpha = 0.5 + d * 0.4;
+    ctx.strokeStyle = `rgba(255,180,60,${alpha})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(pA.x, pA.y);
+    ctx.lineTo(pB.x, pB.y);
+    ctx.stroke();
+  }
+
+  // ── Draw ribs (far to near) ──
+  for (let rib of sortedRibs) {
+    let d = rib.depth;
+    let alpha = 0.35 + d * 0.45;
+    let spineXY = project(rib.station.x, height/2, rib.station.z);
+
+    ctx.strokeStyle = `rgba(255,200,100,${alpha})`;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let pi = 0; pi < rib.points.length; pi++) {
+      if (pi === 0) ctx.moveTo(rib.points[pi].x, rib.points[pi].y);
+      else ctx.lineTo(rib.points[pi].x, rib.points[pi].y);
+    }
+    ctx.stroke();
+
+    // Connection dot
+    ctx.fillStyle = `rgba(255,200,100,${0.4 + d * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(spineXY.x, spineXY.y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ── Spine dots at plain stations ──
+  for (let pt of sortedPts) {
+    if (bedXSections.some(xs => xs.x === pt.x && xs.points.length >= 2)) continue;
+    let p = project(pt.x, height/2, pt.z);
+    ctx.fillStyle = `rgba(255,180,60,${0.25 + p.depth * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ── Border ──
+  ctx.strokeStyle = 'rgba(255,200,100,0.2)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(1, 1, TW - 2, TH - 2);
 }
 
 function drawBedProfile() {
@@ -928,6 +1335,40 @@ function setup() {
   depoBuffer = createGraphics(width, height);
   depoBuffer.background(0, 0);
 
+  // Bed surface overlay buffer
+  bedSurface = createGraphics(width, height);
+  bedSurface.background(0, 0);
+  updateBedBuffer();
+
+  // Isometric bed thumbnail
+  bedThumb = document.getElementById('bed-thumb').getContext('2d');
+  updateBedThumb();
+
+  // Rotation drag handlers on thumbnail
+  let thumbCanvas = document.getElementById('bed-thumb');
+  thumbCanvas.addEventListener('mousedown', function(e) {
+    thumbDragging = true;
+    thumbDragLast = { x: e.clientX, y: e.clientY };
+    e.stopPropagation();
+  });
+  window.addEventListener('mousemove', function(e) {
+    if (!thumbDragging) return;
+    let dx = e.clientX - thumbDragLast.x;
+    let dy = e.clientY - thumbDragLast.y;
+    thumbAngleX = (thumbAngleX + dx * 0.5) % 360;
+    thumbAngleY = Math.max(5, Math.min(85, thumbAngleY - dy * 0.5));
+    thumbDragLast = { x: e.clientX, y: e.clientY };
+    updateBedThumb();
+  });
+  window.addEventListener('mouseup', function() {
+    thumbDragging = false;
+  });
+
+  // Z-scale slider
+  document.getElementById('z-scale').addEventListener('input', function() {
+    updateBedThumb();
+  });
+
   // Seed obstacles for an interesting starting scene
   addObstacle(width * 0.2, height * 0.35, 'circle', 0);
   addObstacle(width * 0.35, height * 0.6, 'square', 30);
@@ -969,7 +1410,10 @@ function draw() {
   // Grid
   drawGrid();
 
-  // Bed profile (below deposition so deposits accumulate on bed surface)
+  // Bed surface overlay (below deposits, above background)
+  if (!bedMode) image(bedSurface, 0, 0);
+
+  // Bed profile editor strips (bed mode only)
   drawBedProfile();
 
   // Deposition buffer
@@ -1011,6 +1455,8 @@ function mousePressed() {
       let z = (stripY + stripH - mouseY) / stripH * bedMaxZ;
       bedPoints.push({ x: mouseX, z: max(0, z) });
       bedPoints.sort((a, b) => a.x - b.x);
+      updateBedBuffer();
+      updateBedThumb();
       return;
     }
     
@@ -1048,6 +1494,8 @@ function mousePressed() {
         }
         bedXSections[xsIdx].points.push({ y: constrain(y, 0, height), z: z });
         bedXSections[xsIdx].points.sort((a, b) => a.y - b.y);
+        updateBedBuffer();
+        updateBedThumb();
       }
     } else {
       activeXSection = -1;
@@ -1117,6 +1565,8 @@ function keyPressed() {
     // In bed mode, remove last point
     if (bedMode && bedPoints.length > 0) {
       bedPoints.pop();
+      updateBedBuffer();
+      updateBedThumb();
     }
   } else if (key === 'Escape') {
     selectedIdx = -1;
@@ -1273,7 +1723,8 @@ async function bakeToOpenFOAM() {
     width: width,
     height: height,
     depo_png: depoBuffer.elt.toDataURL('image/png'),  // Bed morphology
-    bed_profile: bedPoints  // User-drawn bed cross-section
+    bed_profile: bedPoints,  // User-drawn bed longitudinal section
+    bed_xsections: bedXSections  // Transverse cross-section profiles
   };
   
   try {
@@ -1342,6 +1793,14 @@ function windowResized() {
     depoBuffer.image(oldDepo, 0, 0, width, height);
     oldDepo.remove();
   }
+  
+  // Rebuild bed surface
+  let oldBed = bedSurface;
+  bedSurface = createGraphics(width, height);
+  bedSurface.background(0, 0);
+  if (oldBed) oldBed.remove();
+  updateBedBuffer();
+  updateBedThumb();
 }
 </script>
 </body>
