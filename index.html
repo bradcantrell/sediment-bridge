@@ -240,7 +240,7 @@ let bedThumb;
 let trailBuffer;
 let gridLayer;
 
-let paused = false;
+let paused = true;
 let showFlow = false;
 let showGrid = false;
 let showHelp = true;
@@ -1116,7 +1116,6 @@ function draw() {
   }
 
   background(10, 10, 20);
-  drawBedProfile();
   image(depoBuffer, 0, 0);
 
   // Bed surface — behind trails so trails paint over it
@@ -1134,6 +1133,7 @@ function draw() {
   drawSpotElevations();
   drawParticles();
   drawObstacles();
+  drawBedProfile();
   if (!paused && !bedMode) drawGhost();
   if (timelineEnabled) drawTimeline();
 
