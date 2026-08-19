@@ -175,6 +175,7 @@ const DT = 0.08;
 const VISC = 0.00005;
 const MIN_PARTICLE_AGE = 0.8;
 const MIN_TRAVEL_X = 100;
+const MAX_PARTICLE_AGE = 30;
 const GAUSS_SEIDEL_ITERS = 30;
 
 // Tunable simulation parameters
@@ -313,7 +314,7 @@ function buildSolidMask() {
 }
 
 function setBnd(b, x) {
-  for (let j = 1; j <= NY; j++) { x[IX(0, j)] = b === 1 ? -x[IX(1, j)] : x[IX(1, j)]; }
+  for (let j = 1; j <= NY; j++) { x[IX(0, j)] = x[IX(1, j)]; } // open inflow boundary (copy), not wall mirror
   for (let j = 1; j <= NY; j++) { x[IX(NX+1, j)] = x[IX(NX, j)]; }
   for (let i = 1; i <= NX; i++) {
     x[IX(i, 0)] = b === 2 ? -x[IX(i, 1)] : x[IX(i, 1)];
@@ -366,8 +367,8 @@ function project(uVec, vVec, pArr, divArr) {
     for (let i = 1; i <= NX; i++) {
       let idx = IX(i, j);
       if (solid[idx]) { divArr[idx] = 0; pArr[idx] = 0; continue; }
-      let uR = solid[IX(i+1, j)] ? 0 : uVec[IX(i+1, j)], uL = solid[IX(i-1, j)] ? 0 : uVec[idx];
-      let vT = solid[IX(i, j+1)] ? 0 : vVec[IX(i, j+1)], vB = solid[IX(i, j-1)] ? 0 : vVec[idx];
+      let uR = solid[IX(i+1, j)] ? 0 : uVec[IX(i+1, j)], uL = solid[IX(i-1, j)] ? 0 : uVec[IX(i-1, j)];
+      let vT = solid[IX(i, j+1)] ? 0 : vVec[IX(i, j+1)], vB = solid[IX(i, j-1)] ? 0 : vVec[IX(i, j-1)];
       divArr[idx] = -0.5 * (uR - uL + vT - vB); pArr[idx] = 0;
     }
   }
@@ -377,8 +378,8 @@ function project(uVec, vVec, pArr, divArr) {
     for (let i = 1; i <= NX; i++) {
       let idx = IX(i, j);
       if (solid[idx]) continue;
-      let uR = solid[IX(i+1, j)] ? 0 : uVec[IX(i+1, j)], uL = solid[IX(i-1, j)] ? 0 : uVec[idx];
-      let vT = solid[IX(i, j+1)] ? 0 : vVec[IX(i, j+1)], vB = solid[IX(i, j-1)] ? 0 : vVec[idx];
+      let uR = solid[IX(i+1, j)] ? 0 : uVec[IX(i+1, j)], uL = solid[IX(i-1, j)] ? 0 : uVec[IX(i-1, j)];
+      let vT = solid[IX(i, j+1)] ? 0 : vVec[IX(i, j+1)], vB = solid[IX(i, j-1)] ? 0 : vVec[IX(i, j-1)];
       uVec[idx] -= 0.5 * (pArr[IX(i+1, j)] - pArr[IX(i-1, j)]);
       vVec[idx] -= 0.5 * (pArr[IX(i, j+1)] - pArr[IX(i, j-1)]);
     }
@@ -429,7 +430,7 @@ function isInsideObstacle(px, py) {
 
 function spawnParticle() {
   let x = random(cellW, cellW * 3), y = random(cellH, height - cellH);
-  return { x, y, vx: random(inflowVel*0.5, inflowVel*1.2) * cellW, vy: random(-0.3,0.3)*cellH, born: simTime };
+  return { x, y, vx: random(inflowVel*0.5, inflowVel*1.2) * cellW, vy: random(-0.3,0.3)*cellH, born: simTime - random(0, MAX_PARTICLE_AGE) };
 }
 
 function initParticles() {
@@ -441,34 +442,65 @@ function updateParticles() {
   for (let i = particles.length - 1; i >= 0; i--) {
     let p = particles[i];
     let vel = getVelocityAt(p.x, p.y);
-    p.vx = vel.vx; p.vy = vel.vy;
+    // Gradual velocity response (inertia) instead of instant assignment
+    p.vx += (vel.vx - p.vx) * 0.35;
+    p.vy += (vel.vy - p.vy) * 0.35;
+    // Turbulent diffusion: noise perturbs velocity, not position
+    let flowSpd = mag(vel.vx, vel.vy);
+    p.vx += (noise(p.x*0.02, p.y*0.02, simTime*0.3) - 0.5) * 0.12 * flowSpd;
+    p.vy += (noise(p.x*0.02+50, p.y*0.02, simTime*0.3) - 0.5) * 0.12 * flowSpd;
 
     let bedHere = 0;
     if (bedPoints.length >= 2) {
       bedHere = bedZ(p.x, p.y);
-      if (bedHere < 5) {
-        let bedAbove = bedZ(p.x, max(0, p.y - 4)), bedBelow = bedZ(p.x, min(height, p.y + 4));
-        if (bedAbove > bedBelow) p.vy -= cellH * 0.8;
-        else if (bedBelow > bedAbove) p.vy += cellH * 0.8;
-        let bedLeft = bedZ(max(0, p.x - 4), p.y), bedRight = bedZ(min(width, p.x + 4), p.y);
-        if (bedLeft > bedRight) p.vx -= cellW * 0.3;
-        else if (bedRight > bedLeft) p.vx += cellW * 0.3;
+      // Gravity: slide particles DOWN the bed slope (toward lower bed elevation).
+      // Downhill = away from higher z: bed higher above -> slide down (+vy), etc.
+      let bedAbove = bedZ(p.x, max(0, p.y - 4)), bedBelow = bedZ(p.x, min(height, p.y + 4));
+      if (bedAbove > bedBelow) p.vy += cellH * 0.8;
+      else if (bedBelow > bedAbove) p.vy -= cellH * 0.8;
+      let bedLeft = bedZ(max(0, p.x - 4), p.y), bedRight = bedZ(min(width, p.x + 4), p.y);
+      if (bedLeft > bedRight) p.vx += cellW * 0.3;
+      else if (bedRight > bedLeft) p.vx -= cellW * 0.3;
+    }
+
+    // FLOW: ×4 rescales the Stam field velocity (u*cellW) to a stable visual drift.
+    // The solver advects the field by u*DT*NX cells/frame (dt0 convention), and at
+    // inflow 2.5 (32× over CFL) the literal speed teleports. ×4 keeps ~8 px/frame.
+    p.x += p.vx * DT * 4;
+    p.y += p.vy * DT * 4;
+
+
+
+    let age = simTime - (p.born||0);
+    if (p.x < 0 || p.x > width || p.y < 0 || p.y > height || age > MAX_PARTICLE_AGE) { particles.splice(i,1); continue; }
+    if (isInsideObstacle(p.x, p.y)) {
+      for (let ob of obstacles) {
+        if (simTime < ob.appearsAt || simTime > ob.disappearsAt) continue;
+        let dx = p.x - ob.x, dy = p.y - ob.y, nx = 0, ny = 0, pen = 0;
+        if (ob.type === 'circle') {
+          let r = ob.size / 2, d = Math.sqrt(dx * dx + dy * dy);
+          if (d >= r || d === 0) continue;
+          nx = dx / d; ny = dy / d; pen = r - d;
+        } else {
+          let a = -ob.rotation * PI / 180, cosA = Math.cos(a), sinA = Math.sin(a);
+          let rx = dx * cosA - dy * sinA, ry = dx * sinA + dy * cosA, h = ob.size / 2;
+          if (Math.abs(rx) >= h || Math.abs(ry) >= h) continue;
+          let penX = h - Math.abs(rx), penY = h - Math.abs(ry);
+          if (penX < penY) { nx = Math.sign(rx) * cosA; ny = Math.sign(rx) * sinA; pen = penX; }
+          else { nx = -Math.sign(ry) * sinA; ny = Math.sign(ry) * cosA; pen = penY; }
+        }
+        p.x += nx * (pen + 0.5); p.y += ny * (pen + 0.5);
+        let vn = p.vx * nx + p.vy * ny;
+        if (vn < 0) { p.vx -= 1.4 * vn * nx; p.vy -= 1.4 * vn * ny; }
       }
     }
 
-    p.x += p.vx * DT * 4;
-    p.y += p.vy * DT * 4;
-    p.x += (noise(p.x*0.01, p.y*0.01, simTime) - 0.5) * 2;
-    p.y += (noise(p.x*0.01+100, p.y*0.01, simTime) - 0.5) * 2;
-
-    if (p.x < 0 || p.x > width || p.y < 0 || p.y > height) { particles.splice(i,1); continue; }
-    if (isInsideObstacle(p.x, p.y)) { p.x += random(-5,5); p.y += random(-5,5); }
-
     let speed = mag(p.vx, p.vy) / ((cellW+cellH)/2);
-    let age = simTime - (p.born||0);
     let bedSettleBoost = bedHere > 0 ? 1.0 + (bedHere/160)*4.0 : 1.0;
     if (p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE && speed < settleThresh && random() < settleProb * bedSettleBoost) {
       deposited.push({ x: p.x, y: p.y, z: bedHere });
+      depoBuffer.noStroke(); depoBuffer.fill(255,180,60,18); depoBuffer.ellipse(p.x,p.y,6,6);
+      depoBuffer.fill(255,210,100,11); depoBuffer.ellipse(p.x,p.y,3,3);
       particles.splice(i, 1);
     }
   }
@@ -487,14 +519,18 @@ function updateParticles() {
     }
   }
 
-  while (particles.length + deposited.length < particleCount) {
+  // Cap tracked deposits: oldest 'compact' into the bed (visual persists in depoBuffer,
+  // no longer erodible). Keeps the deposited array bounded.
+  if (deposited.length > particleCount) deposited.splice(0, deposited.length - particleCount);
+
+  while (particles.length < particleCount) {
     let spawnX = random(cellW, cellW*3), spawnY;
     if (bedPoints.length >= 2) {
       let yLo=cellH, yHi=height-cellH, found=false;
       for (let sy=cellH; sy<height-cellH; sy+=4) { if(bedZ(spawnX,sy)>5){if(!found){yLo=sy;found=true;}yHi=sy;} }
       spawnY = found && yHi>yLo ? random(yLo,yHi) : random(cellH,height-cellH);
     } else { spawnY = random(cellH, height-cellH); }
-    particles.push({ x:spawnX, y:spawnY, vx:random(inflowVel*0.5,inflowVel*1.5)*cellW, vy:random(-0.2,0.2)*cellH, born:simTime });
+    particles.push({ x:spawnX, y:spawnY, vx:random(inflowVel*0.5,inflowVel*1.5)*cellW, vy:random(-0.2,0.2)*cellH, born:simTime - random(0, MAX_PARTICLE_AGE) });
   }
 }
 
@@ -502,10 +538,8 @@ function updateParticles() {
 // VISUAL RENDERING
 // ─────────────────────────────────────────────
 function drawDeposition() {
-  for (let d of deposited) {
-    depoBuffer.noStroke(); depoBuffer.fill(255,180,60,18); depoBuffer.ellipse(d.x,d.y,6,6);
-    depoBuffer.fill(255,210,100,11); depoBuffer.ellipse(d.x,d.y,3,3);
-  }
+  // Dots are drawn once at settle time (in updateParticles); redrawing every frame
+  // would stack alpha and darken deposition into a solid blob.
 }
 
 function drawFlowField() {
@@ -803,8 +837,8 @@ function setup() {
   let canvas = createCanvas(cw, ch);
   pixelDensity(1);
 
-  cellW = width / NX;
-  cellH = height / NY;
+  cellW = width / (NX + 2);
+  cellH = height / (NY + 2);
 
   u = new Float32Array(SIZE); v = new Float32Array(SIZE);
   uPrev = new Float32Array(SIZE); vPrev = new Float32Array(SIZE);
@@ -1068,6 +1102,7 @@ function mouseWheel(event) {
 
 function keyPressed() {
   if (key===' ') { paused=!paused; }
+  else if (key==='r'||key==='R') { simTime=0; initParticles(); depoBuffer.clear(); trailBuffer.clear(); bedSurface.clear(); updateBedBuffer(); }
   else if (key==='f'||key==='F') { showFlow=!showFlow; }
   else if (key==='g'||key==='G') { showGrid=!showGrid; }
   else if (key==='h'||key==='H') { showHelp=!showHelp; }
