@@ -142,8 +142,8 @@
     <div class="ctrl-row"><label>inflow <span class="val" id="inflow-val">2.5</span></label><input type="range" id="inflow" min="0.5" max="5" value="2.5" step="0.1"></div>
     <div class="ctrl-row"><label>settle thresh <span class="val" id="settle-thresh-val">0.20</span></label><input type="range" id="settle-thresh" min="0.05" max="0.8" value="0.20" step="0.01"></div>
     <div class="ctrl-row"><label>settle prob <span class="val" id="settle-prob-val">0.012</span></label><input type="range" id="settle-prob" min="0.002" max="0.08" value="0.012" step="0.001"></div>
-    <div class="ctrl-row"><label>erode thresh <span class="val" id="erosion-thresh-val">0.50</span></label><input type="range" id="erosion-thresh" min="0.1" max="1.2" value="0.50" step="0.01"></div>
-    <div class="ctrl-row"><label>erode prob <span class="val" id="erosion-prob-val">0.06</span></label><input type="range" id="erosion-prob" min="0.01" max="0.2" value="0.06" step="0.005"></div>
+    <div class="ctrl-row"><label>erode thresh <span class="val" id="erosion-thresh-val">1.00</span></label><input type="range" id="erosion-thresh" min="0.2" max="3.0" value="1.0" step="0.01"></div>
+    <div class="ctrl-row"><label>erode prob <span class="val" id="erosion-prob-val">0.02</span></label><input type="range" id="erosion-prob" min="0.005" max="0.1" value="0.02" step="0.005"></div>
 
     <div class="sect-label">render <button class="reset-btn" id="reset-render">reset</button></div>
     <div class="ctrl-row"><label>trail fade <span class="val" id="trail-fade-val">7</span></label><input type="range" id="trail-fade" min="2" max="40" value="7" step="1"></div>
@@ -164,6 +164,7 @@
       <button id="toggle-flow" class="tg-off">flow</button>
       <button id="toggle-bed" class="tg-off">bed</button>
       <button id="toggle-pause" class="tg-off">pause</button>
+      <button id="toggle-elev" class="tg-off">elev</button>
     </div>
 
     <div class="sect-label">timeline <button id="toggle-timeline" class="reset-btn" style="font-size:7px;">off</button></div>
@@ -196,9 +197,17 @@ const GAUSS_SEIDEL_ITERS = 30;
 // Tunable simulation parameters
 let inflowVel = 2.5;
 let settleThresh = 0.20;
-let erosionThresh = 0.50;
+let erosionThresh = 1.0;
 let settleProb = 0.012;
-let erosionProb = 0.06;
+let erosionProb = 0.02;
+
+// Deposition heightfield (aggradation): sediment accumulates as extra bed height
+// so the bed physically builds up instead of leaving only visual dots.
+const DEPO_CELL = 4;        // deposition grid cell size (px)
+const DEPO_MAX = 160;       // max accumulated deposit height (px)
+const DEPO_AMOUNT = 4.0;    // bed height added per deposited particle (px)
+let GW = 0, GH = 0, depoGrid = null;
+let bedRenderAcc = 0;       // timer for periodic bed-surface re-render
 
 // ─────────────────────────────────────────────
 // GLOBAL STATE
@@ -235,6 +244,7 @@ let paused = false;
 let showFlow = false;
 let showGrid = false;
 let showHelp = true;
+let showElev = false;
 let simTime = 0;
 
 // Bed profile
@@ -286,7 +296,7 @@ function getStationZ(station, y) {
   return station.z;
 }
 
-function bedZ(x, y) {
+function userBedZ(x, y) {
   if (bedPoints.length < 2) return 0;
   if (x <= bedPoints[0].x) return getStationZ(bedPoints[0], y);
   if (x >= bedPoints[bedPoints.length - 1].x) return getStationZ(bedPoints[bedPoints.length - 1], y);
@@ -297,6 +307,34 @@ function bedZ(x, y) {
     }
   }
   return 0;
+}
+
+// Combined bed height = user-drawn bed + accumulated deposition (aggradation).
+function bedZ(x, y) { return userBedZ(x, y) + depoZ(x, y); }
+
+function depoZ(x, y) {
+  if (!depoGrid) return 0;
+  let fx = x / DEPO_CELL - 0.5, fy = y / DEPO_CELL - 0.5;
+  let i = Math.floor(fx), j = Math.floor(fy);
+  if (i < 0 || j < 0 || i >= GW - 1 || j >= GH - 1) return 0;
+  let tx = fx - i, ty = fy - j;
+  let a = depoGrid[j * GW + i], b = depoGrid[j * GW + i + 1];
+  let c = depoGrid[(j + 1) * GW + i], d = depoGrid[(j + 1) * GW + i + 1];
+  return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+}
+
+function addDeposit(x, y, amt) {
+  if (!depoGrid) return;
+  let i = Math.floor(x / DEPO_CELL), j = Math.floor(y / DEPO_CELL);
+  for (let dj = -1; dj <= 1; dj++) {
+    for (let di = -1; di <= 1; di++) {
+      let ii = i + di, jj = j + dj;
+      if (ii < 0 || ii >= GW || jj < 0 || jj >= GH) continue;
+      let w = (di === 0 && dj === 0) ? 0.5 : 0.0625;
+      let idx = jj * GW + ii;
+      depoGrid[idx] = Math.max(0, Math.min(DEPO_MAX, depoGrid[idx] + amt * w));
+    }
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -489,6 +527,7 @@ function settleParticle(p, bedHere) {
   deposited.push({ x: p.x, y: p.y, z: bedHere });
   depoBuffer.noStroke(); depoBuffer.fill(255,180,60,18); depoBuffer.ellipse(p.x,p.y,6,6);
   depoBuffer.fill(255,210,100,11); depoBuffer.ellipse(p.x,p.y,3,3);
+  addDeposit(p.x, p.y, DEPO_AMOUNT);   // raise the bed where sediment settles
 }
 
 function updateParticles() {
@@ -573,7 +612,7 @@ function updateParticles() {
     // the particles never "followed" it.
     let onBed = bedHere > 1;
     if (onBed && p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE) {
-      let bedDep = settleProb * (0.5 + (bedHere / 160) * 2.0);   // 0.5x..2.5x settleProb
+      let bedDep = settleProb * (1.0 + (bedHere / 160) * 4.0);   // 1x..5x settleProb
       if (random() < bedDep) {
         settleParticle(p, bedHere);
         particles.splice(i, 1);
@@ -601,6 +640,7 @@ function updateParticles() {
       let resist = bedHere2 > 0 ? 1.0/(1.0 + (bedHere2/160)*2.0) : 1.0;
       if (random() > resist) continue;
       depoBuffer.noStroke(); depoBuffer.fill(10,10,20,80); depoBuffer.ellipse(d.x,d.y,8,8);
+      addDeposit(d.x, d.y, -DEPO_AMOUNT);   // erode accumulated bed height
       particles.push({ x: d.x+random(-3,3), y: d.y+random(-3,3), vx: vel.vx+random(-0.5,0.5), vy: vel.vy+random(-0.5,0.5), born: simTime });
       deposited.splice(i, 1);
     }
@@ -650,6 +690,24 @@ function drawFlowField() {
   }
 }
 
+function drawSpotElevations() {
+  if (!showElev) return;
+  let step = max(1, floor(min(NX,NY)/flowDensity));
+  noStroke();
+  textAlign(CENTER, BOTTOM); textSize(9);
+  for (let j=step; j<=NY; j+=step) {
+    for (let i=step; i<=NX; i+=step) {
+      let idx = IX(i,j);
+      if (solid[idx]) continue;
+      let px = i*cellW, py = j*cellH;
+      let z = bedZ(px, py);   // combined bed + deposition elevation
+      if (z <= 0) continue;
+      fill(255,215,110,200); ellipse(px, py, 4, 4);
+      fill(255,235,170,235); text(Math.round(z), px, py - 4);
+    }
+  }
+}
+
 function drawGrid() { /* now inline */ }
 
 function drawObstacles() {
@@ -665,6 +723,9 @@ function drawObstacles() {
     if (i===selectedIdx) { stroke(255,200,100,80); strokeWeight(4); if(ob.type==='circle')ellipse(0,0,ob.size+6);else rect(0,0,ob.size+6,ob.size+6); }
     stroke(255,255,255,60); strokeWeight(0.5); line(-8,0,8,0); line(0,-8,0,8);
     pop();
+    // timeline index centered on the object (upright, not rotated)
+    fill(255,255,255,220); noStroke(); textAlign(CENTER, CENTER); textSize(12);
+    text(String(i + 1), ob.x, ob.y);
   }
 }
 
@@ -708,13 +769,12 @@ function drawParticles() {
 // ── Bed surface render ──
 function updateBedBuffer() {
   bedSurface.clear();
-  if (bedPoints.length < 2) return;
   let bedMaxZ=160, step=8;
   bedSurface.noStroke();
   for (let px=0; px<width; px+=step) {
     for (let py=0; py<height; py+=step) {
       let z=bedZ(px,py); if (z<=0) continue;
-      let t=z/bedMaxZ;
+      let t=Math.min(1, z/bedMaxZ);
       bedSurface.fill(40+t*80, 20+t*35, 10+t*15, 10+t*40);
       bedSurface.rect(px,py,step,step);
     }
@@ -939,6 +999,9 @@ function setup() {
 
   bedSurface = createGraphics(width, height);
   bedSurface.background(0, 0);
+  GW = Math.ceil(width / DEPO_CELL) + 1;
+  GH = Math.ceil(height / DEPO_CELL) + 1;
+  depoGrid = new Float32Array(GW * GH);
   updateBedBuffer();
 
   bedThumb = document.getElementById('bed-thumb').getContext('2d');
@@ -987,21 +1050,23 @@ function setup() {
     document.getElementById('toggle-flow').className=showFlow?'tg-on':'tg-off';
     document.getElementById('toggle-bed').className=bedMode?'tg-on':'tg-off';
     document.getElementById('toggle-pause').className=paused?'tg-on':'tg-off';
+    document.getElementById('toggle-elev').className=showElev?'tg-on':'tg-off';
   }
   document.getElementById('toggle-grid').addEventListener('click',function(){showGrid=!showGrid;updateToggles();});
   document.getElementById('toggle-flow').addEventListener('click',function(){showFlow=!showFlow;updateToggles();});
   document.getElementById('toggle-bed').addEventListener('click',function(){bedMode=!bedMode;if(bedMode)paused=true;else paused=false;updateToggles();});
   document.getElementById('toggle-pause').addEventListener('click',function(){paused=!paused;updateToggles();});
+  document.getElementById('toggle-elev').addEventListener('click',function(){showElev=!showElev;updateToggles();});
   updateToggles();
 
   // Reset buttons
   document.getElementById('reset-physics').addEventListener('click',function(){
-    inflowVel=2.5;settleThresh=0.20;erosionThresh=0.50;settleProb=0.012;erosionProb=0.06;
+    inflowVel=2.5;settleThresh=0.20;erosionThresh=1.0;settleProb=0.012;erosionProb=0.02;
     document.getElementById('inflow').value=2.5;document.getElementById('inflow-val').textContent='2.5';
     document.getElementById('settle-thresh').value=0.20;document.getElementById('settle-thresh-val').textContent='0.20';
     document.getElementById('settle-prob').value=0.012;document.getElementById('settle-prob-val').textContent='0.012';
-    document.getElementById('erosion-thresh').value=0.50;document.getElementById('erosion-thresh-val').textContent='0.50';
-    document.getElementById('erosion-prob').value=0.06;document.getElementById('erosion-prob-val').textContent='0.06';
+    document.getElementById('erosion-thresh').value=1.0;document.getElementById('erosion-thresh-val').textContent='1.00';
+    document.getElementById('erosion-prob').value=0.02;document.getElementById('erosion-prob-val').textContent='0.02';
   });
   document.getElementById('reset-render').addEventListener('click',function(){
     trailFade=7;particleSize=2;slowColor='#ff44aa';fastColor='#ddeeff';
@@ -1046,6 +1111,8 @@ function draw() {
     velocityStep();
     updateParticles();
     drawDeposition();
+    bedRenderAcc += DT;
+    if (bedRenderAcc >= 0.5) { bedRenderAcc = 0; updateBedBuffer(); }
   }
 
   background(10, 10, 20);
@@ -1064,6 +1131,7 @@ function draw() {
   }
 
   drawFlowField();
+  drawSpotElevations();
   drawParticles();
   drawObstacles();
   if (!paused && !bedMode) drawGhost();
@@ -1209,6 +1277,7 @@ function keyPressed() {
   if (key===' ') { paused=!paused; }
   else if (key==='r'||key==='R') {
     simTime=0; initParticles(); depoBuffer.clear(); trailBuffer.clear();
+    if (depoGrid) depoGrid.fill(0);
     bedSurface.clear(); updateBedBuffer();
     // Restart preserves bed (bedPoints/bedXSections) and obstacle placement.
     // isObstacleActive keeps obstacles on (timeline off) or re-sequences them from
