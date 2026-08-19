@@ -83,10 +83,19 @@
     }
 
     #hud {
-      position: fixed; top: 12px; left: 12px; z-index: 20;
+      position: fixed; top: 48px; left: 12px; z-index: 20;
       font-size: 11px; color: rgba(255,255,255,0.45);
       pointer-events: none; line-height: 1.7; user-select: none;
     }
+    #timeline-bar {
+      position: fixed; top: 0; left: 0;
+      width: calc(100vw - 270px);
+      max-height: 55vh; overflow-y: auto;
+      background: rgba(8,8,16,0.96);
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      z-index: 40; display: none;
+    }
+    #timeline-bar canvas { display: block; }
     .hv { color: rgba(255,200,100,0.75); }
     .hw { color: rgba(255,120,80,0.75); }
 
@@ -156,8 +165,14 @@
       <button id="toggle-bed" class="tg-off">bed</button>
       <button id="toggle-pause" class="tg-off">pause</button>
     </div>
+
+    <div class="sect-label">timeline <button id="toggle-timeline" class="reset-btn" style="font-size:7px;">off</button></div>
+    <div class="ctrl-row"><label>loop <span class="val" id="timeline-dur-val">120s</span></label><input type="range" id="timeline-dur" min="30" max="600" value="120" step="5"></div>
+    <div class="ctrl-row"><label>mode</label><button id="toggle-pingpong" class="reset-btn" style="font-size:8px;">loop</button></div>
   </div>
 </div>
+
+<div id="timeline-bar"><canvas id="timeline-canvas"></canvas></div>
 
 <div id="help" style="position:fixed;bottom:8px;left:50%;transform:translateX(-50%);font-size:10px;color:rgba(255,255,255,0.2);pointer-events:none;z-index:5;text-align:center;">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; M bed &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
 
@@ -198,6 +213,14 @@ let selectedIdx = -1;
 let ghostType = 'square';
 let ghostRotation = 0;
 let ghostSize = 40;
+
+// Timeline: choreograph obstacle existence through a looping time range.
+let timelineEnabled = false;
+let timelineDuration = 120;   // loop length in seconds (30..600)
+const DEFAULT_OBJ_DUR = 10;   // default lifetime of a newly placed obstacle
+let timelinePingPong = false; // false = loop forward, true = bounce back and forth
+let tlDrag = null;            // active timeline drag {mode, obstacleIdx, clipIdx, grabX, ...}
+let selectedClip = -1;        // clip index within obstacles[selectedIdx].clips, -1 = none
 
 let particles = [];
 let deposited = [];
@@ -291,7 +314,7 @@ function addSource(x, s) {
 function buildSolidMask() {
   solid.fill(0);
   for (let ob of obstacles) {
-    if (simTime < ob.appearsAt || simTime > ob.disappearsAt) continue;
+    if (!isObstacleActive(ob)) continue;
     let cx = ob.x / cellW, cy = ob.y / cellH, r = ob.size / 2;
     let rg = r / ((cellW + cellH) / 2);
     let i0 = max(1, floor(cx - rg - 1)), i1 = min(NX, ceil(cx + rg + 1));
@@ -412,9 +435,33 @@ function getVelocityAt(px, py) {
   return { vx: solid[idx] ? 0 : u[idx] * cellW, vy: solid[idx] ? 0 : v[idx] * cellH };
 }
 
+function timelineLoopTime() {
+  let T = timelineDuration;
+  if (!timelinePingPong) return ((simTime % T) + T) % T;
+  let m = ((simTime % (2 * T)) + 2 * T) % (2 * T);   // position in a full back-and-forth cycle
+  return m <= T ? m : 2 * T - m;                     // bounce at the ends
+}
+
+function isObstacleActive(ob) {
+  if (!timelineEnabled) return true;   // timeline off -> every obstacle always on
+  let T = timelineDuration;
+  let loopT = timelineLoopTime();
+  let clips = ob.clips || [];
+  for (let c of clips) {
+    let start = ((c.start || 0) % T + T) % T;        // normalize into [0,T)
+    let dur = (c.dur == null) ? DEFAULT_OBJ_DUR : c.dur;
+    if (dur <= 0) continue;
+    if (dur >= T) return true;                       // spans the whole loop
+    let end = start + dur;
+    if (end <= T) { if (loopT >= start && loopT < end) return true; }
+    else { if (loopT >= start || loopT < (end - T)) return true; }   // wraps loop end
+  }
+  return false;
+}
+
 function isInsideObstacle(px, py) {
   for (let ob of obstacles) {
-    if (simTime < ob.appearsAt || simTime > ob.disappearsAt) continue;
+    if (!isObstacleActive(ob)) continue;
     let dx = px - ob.x, dy = py - ob.y;
     if (ob.type === 'circle') {
       if (dx*dx + dy*dy <= (ob.size/2)*(ob.size/2)) return true;
@@ -438,6 +485,12 @@ function initParticles() {
   for (let i = 0; i < particleCount; i++) particles.push(spawnParticle());
 }
 
+function settleParticle(p, bedHere) {
+  deposited.push({ x: p.x, y: p.y, z: bedHere });
+  depoBuffer.noStroke(); depoBuffer.fill(255,180,60,18); depoBuffer.ellipse(p.x,p.y,6,6);
+  depoBuffer.fill(255,210,100,11); depoBuffer.ellipse(p.x,p.y,3,3);
+}
+
 function updateParticles() {
   for (let i = particles.length - 1; i >= 0; i--) {
     let p = particles[i];
@@ -453,14 +506,19 @@ function updateParticles() {
     let bedHere = 0;
     if (bedPoints.length >= 2) {
       bedHere = bedZ(p.x, p.y);
-      // Gravity: slide particles DOWN the bed slope (toward lower bed elevation).
-      // Downhill = away from higher z: bed higher above -> slide down (+vy), etc.
+      // Gravity: slide particles DOWN the bed slope, scaled by the LOCAL gradient.
+      // The old version pushed at a CONSTANT speed on any slope however gentle, so a
+      // drawn cross-section funnelled every particle into its single deepest line (the
+      // thalweg) and collapsed the full mesh into one thin channel. Proportional
+      // scaling makes it a gentle drift: flat/near-flat parts barely move particles,
+      // only genuinely steep slopes slide them, so the flow re-spreads them across the
+      // whole cross-section instead of pinching them to one line.
       let bedAbove = bedZ(p.x, max(0, p.y - 4)), bedBelow = bedZ(p.x, min(height, p.y + 4));
-      if (bedAbove > bedBelow) p.vy += cellH * 0.8;
-      else if (bedBelow > bedAbove) p.vy -= cellH * 0.8;
       let bedLeft = bedZ(max(0, p.x - 4), p.y), bedRight = bedZ(min(width, p.x + 4), p.y);
-      if (bedLeft > bedRight) p.vx += cellW * 0.3;
-      else if (bedRight > bedLeft) p.vx -= cellW * 0.3;
+      let gradY = (bedAbove - bedBelow) / 8;   // + = downhill toward +y
+      let gradX = (bedLeft - bedRight) / 8;    // + = downhill toward +x
+      p.vy += gradY * cellH * 2.0;
+      p.vx += gradX * cellW * 0.6;
     }
 
     // FLOW: ×4 rescales the Stam field velocity (u*cellW) to a stable visual drift.
@@ -473,9 +531,10 @@ function updateParticles() {
 
     let age = simTime - (p.born||0);
     if (p.x < 0 || p.x > width || p.y < 0 || p.y > height || age > MAX_PARTICLE_AGE) { particles.splice(i,1); continue; }
+    let hitObstacle = false;
     if (isInsideObstacle(p.x, p.y)) {
       for (let ob of obstacles) {
-        if (simTime < ob.appearsAt || simTime > ob.disappearsAt) continue;
+        if (!isObstacleActive(ob)) continue;
         let dx = p.x - ob.x, dy = p.y - ob.y, nx = 0, ny = 0, pen = 0;
         if (ob.type === 'circle') {
           let r = ob.size / 2, d = Math.sqrt(dx * dx + dy * dy);
@@ -492,15 +551,43 @@ function updateParticles() {
         p.x += nx * (pen + 0.5); p.y += ny * (pen + 0.5);
         let vn = p.vx * nx + p.vy * ny;
         if (vn < 0) { p.vx -= 1.4 * vn * nx; p.vy -= 1.4 * vn * ny; }
+        hitObstacle = true;
       }
     }
 
+    // Sediment slamming into an obstacle sticks to it instead of bouncing forever,
+    // so deposits build up against obstructions. A particle pinned against an
+    // obstacle re-collides each frame, so it settles within a fraction of a second.
+    if (hitObstacle && p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE && random() < settleProb * 4.0) {
+      settleParticle(p, bedHere);
+      particles.splice(i, 1);
+      continue;
+    }
+
     let speed = mag(p.vx, p.vy) / ((cellW+cellH)/2);
+
+    // Bed deposition: particles flowing over the drawn bed settle onto its surface,
+    // so the deposited sediment accretes along the bedform and traces its shape. The
+    // rate scales with bed height. Without this, settling only happened where the
+    // flow stalls (near obstacles), so the drawn bedform was effectively ignored and
+    // the particles never "followed" it.
+    let onBed = bedHere > 1;
+    if (onBed && p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE) {
+      let bedDep = settleProb * (0.5 + (bedHere / 160) * 2.0);   // 0.5x..2.5x settleProb
+      if (random() < bedDep) {
+        settleParticle(p, bedHere);
+        particles.splice(i, 1);
+        continue;
+      }
+    }
+
+    // Speed-graded settling: the slower a particle, the more readily it deposits.
+    // A hard threshold made settling all-or-nothing; now slowness scales the chance
+    // (a particle at rest settles ~9x faster than one just under the threshold).
     let bedSettleBoost = bedHere > 0 ? 1.0 + (bedHere/160)*4.0 : 1.0;
-    if (p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE && speed < settleThresh && random() < settleProb * bedSettleBoost) {
-      deposited.push({ x: p.x, y: p.y, z: bedHere });
-      depoBuffer.noStroke(); depoBuffer.fill(255,180,60,18); depoBuffer.ellipse(p.x,p.y,6,6);
-      depoBuffer.fill(255,210,100,11); depoBuffer.ellipse(p.x,p.y,3,3);
+    let slow = speed < settleThresh ? 1.0 - speed / settleThresh : 0.0;
+    if (p.x > MIN_TRAVEL_X && age > MIN_PARTICLE_AGE && speed < settleThresh && random() < settleProb * bedSettleBoost * (1.0 + slow * 8.0)) {
+      settleParticle(p, bedHere);
       particles.splice(i, 1);
     }
   }
@@ -568,7 +655,7 @@ function drawGrid() { /* now inline */ }
 function drawObstacles() {
   for (let i=0; i<obstacles.length; i++) {
     let ob = obstacles[i];
-    if (simTime<ob.appearsAt || simTime>ob.disappearsAt) continue;
+    if (!isObstacleActive(ob)) continue;
     push(); translate(ob.x, ob.y); rotate(ob.rotation*PI/180);
     noFill();
     if (i===selectedIdx) { stroke(255,255,255,220); strokeWeight(2.5); }
@@ -931,7 +1018,22 @@ function setup() {
   addObstacle(width*0.2, height*0.35, 'circle', 0);
   addObstacle(width*0.35, height*0.6, 'square', 30);
   addObstacle(width*0.55, height*0.4, 'square', -15);
+  // Default obstacles: spread across the loop so the timeline is meaningful out of
+  // the box; drag/resize them on the timeline bar to re-choreograph.
+  obstacles[0].clips = [{ start: 0, dur: timelineDuration / 3 }];
+  obstacles[1].clips = [{ start: timelineDuration / 3, dur: timelineDuration / 3 }];
+  obstacles[2].clips = [{ start: 2 * timelineDuration / 3, dur: timelineDuration / 3 }];
   ghostRotation = 30;
+
+  // Timeline controls
+  document.getElementById('toggle-timeline').addEventListener('click', function(){ timelineEnabled=!timelineEnabled; updateTimelineVisibility(); });
+  document.getElementById('timeline-dur').addEventListener('input', function(){ timelineDuration=parseFloat(this.value); document.getElementById('timeline-dur-val').textContent=fmtDur(timelineDuration); drawTimeline(); });
+  document.getElementById('toggle-pingpong').addEventListener('click', function(){ timelinePingPong=!timelinePingPong; this.textContent = timelinePingPong ? 'pingpong' : 'loop'; drawTimeline(); });
+  let tlc = document.getElementById('timeline-canvas');
+  tlc.addEventListener('mousedown', timelineMouseDown);
+  window.addEventListener('mousemove', timelineMouseMove);
+  window.addEventListener('mouseup', timelineMouseUp);
+  updateTimelineVisibility();
 
   for (let k=0; k<80; k++) { simTime+=DT; buildSolidMask(); velocityStep(); }
   initParticles();
@@ -965,6 +1067,7 @@ function draw() {
   drawParticles();
   drawObstacles();
   if (!paused && !bedMode) drawGhost();
+  if (timelineEnabled) drawTimeline();
 
   if (showGrid) {
     stroke(30,30,60,80); strokeWeight(0.5);
@@ -1002,7 +1105,7 @@ function windowResized() {
 function hitTestObstacle(mx, my) {
   for (let i=obstacles.length-1;i>=0;i--) {
     let ob=obstacles[i];
-    if (simTime<ob.appearsAt||simTime>ob.disappearsAt) continue;
+    if (!isObstacleActive(ob)) continue;
     let dx=mx-ob.x, dy=my-ob.y;
     if (ob.type==='circle') { if (dx*dx+dy*dy<=(ob.size/2+6)*(ob.size/2+6)) return i; }
     else {
@@ -1015,13 +1118,14 @@ function hitTestObstacle(mx, my) {
 }
 
 function addObstacle(x, y, type, rot) {
-  obstacles.push({ type, x, y, size: ghostSize, rotation: rot||0, appearsAt: simTime, disappearsAt: Infinity });
+  let loopT = timelineEnabled ? timelineLoopTime() : 0;
+  obstacles.push({ type, x, y, size: ghostSize, rotation: rot||0, clips: [{ start: loopT, dur: DEFAULT_OBJ_DUR }] });
 }
 
 function deleteObstacle(idx) { if (idx>=0&&idx<obstacles.length) obstacles.splice(idx,1); }
 
 function mousePressed(event) {
-  if (event && event.target) { let t=event.target; if (t.closest('#sidebar')||t.tagName==='BUTTON'||t.id==='bed-thumb') return; }
+  if (event && event.target) { let t=event.target; if (t.closest('#sidebar')||t.tagName==='BUTTON'||t.id==='bed-thumb'||t.id==='timeline-canvas') return; }
   if (mouseX<0||mouseX>width||mouseY<0||mouseY>height) return;
 
   if (bedMode) {
@@ -1062,12 +1166,12 @@ function mousePressed(event) {
   }
 
   let hit = hitTestObstacle(mouseX, mouseY);
-  if (hit>=0) { selectedIdx=hit; ghostRotation=obstacles[hit].rotation; ghostType=obstacles[hit].type; dragging=true; dragOffX=obstacles[hit].x-mouseX; dragOffY=obstacles[hit].y-mouseY; }
+  if (hit>=0) { selectedIdx=hit; selectedClip=-1; ghostRotation=obstacles[hit].rotation; ghostType=obstacles[hit].type; dragging=true; dragOffX=obstacles[hit].x-mouseX; dragOffY=obstacles[hit].y-mouseY; }
   else { addObstacle(mouseX,mouseY,ghostType,ghostRotation); }
 }
 
 function mouseDragged(event) {
-  if (event&&event.target) { let t=event.target; if(t.closest('#sidebar')||t.id==='bed-thumb') return; }
+  if (event&&event.target) { let t=event.target; if(t.closest('#sidebar')||t.id==='bed-thumb'||t.id==='timeline-canvas') return; }
   if (bedMode) {
     let stripH=160,stripY=height-stripH,bedMaxZ=160;
     if (editingLongPt>=0&&editingLongPt<bedPoints.length) {
@@ -1094,6 +1198,7 @@ function mouseDragged(event) {
 function mouseReleased() { dragging=false; editingLongPt=-1; editingXSStation=null; }
 
 function mouseWheel(event) {
+  if (event && event.target && event.target.id==='timeline-canvas') return true;
   let delta=event.delta>0?5:-5;
   ghostRotation=(ghostRotation+delta)%360; if(ghostRotation<0)ghostRotation+=360;
   if (selectedIdx>=0) obstacles[selectedIdx].rotation=ghostRotation;
@@ -1102,7 +1207,13 @@ function mouseWheel(event) {
 
 function keyPressed() {
   if (key===' ') { paused=!paused; }
-  else if (key==='r'||key==='R') { simTime=0; initParticles(); depoBuffer.clear(); trailBuffer.clear(); bedSurface.clear(); updateBedBuffer(); }
+  else if (key==='r'||key==='R') {
+    simTime=0; initParticles(); depoBuffer.clear(); trailBuffer.clear();
+    bedSurface.clear(); updateBedBuffer();
+    // Restart preserves bed (bedPoints/bedXSections) and obstacle placement.
+    // isObstacleActive keeps obstacles on (timeline off) or re-sequences them from
+    // the top of the loop (timeline on) automatically.
+  }
   else if (key==='f'||key==='F') { showFlow=!showFlow; }
   else if (key==='g'||key==='G') { showGrid=!showGrid; }
   else if (key==='h'||key==='H') { showHelp=!showHelp; }
@@ -1110,7 +1221,13 @@ function keyPressed() {
   else if (key==='2') { ghostType='square'; }
   else if (key==='3') { ghostSize=max(20,ghostSize-5); }
   else if (key==='4') { ghostSize=min(100,ghostSize+5); }
-  else if ((key==='Backspace'||key==='Delete')&&selectedIdx>=0) { deleteObstacle(selectedIdx); selectedIdx=-1; }
+  else if ((key==='Backspace'||key==='Delete')&&selectedIdx>=0&&selectedClip>=0) {
+    let ob = obstacles[selectedIdx];
+    if (ob && ob.clips && ob.clips.length > 0) { ob.clips.splice(selectedClip, 1); }
+    selectedClip = -1; selectedIdx = -1;
+    drawTimeline();
+  }
+  else if ((key==='Backspace'||key==='Delete')&&selectedIdx>=0) { deleteObstacle(selectedIdx); selectedIdx=-1; selectedClip=-1; }
   else if (key==='Backspace'||key==='Delete') {
     if (bedMode) {
       if (activeXSection>=0) {
@@ -1127,6 +1244,248 @@ function keyPressed() {
   else if (key==='b'||key==='B') { bakeToOpenFOAM(); }
   else if (key==='r'||key==='R') { depoBuffer.clear(); deposited=[]; initParticles(); simTime=0; }
   return false;
+}
+
+// ─────────────────────────────────────────────
+// TIMELINE
+// ─────────────────────────────────────────────
+function fmtDur(s) {
+  if (s >= 60) { let m = Math.floor(s/60), r = Math.round(s%60); return r ? m + 'm' + r + 's' : m + 'm'; }
+  return Math.round(s) + 's';
+}
+
+function niceTimeStep(T, W) {
+  let target = T / Math.max(1, Math.round(W / 90));
+  let steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+  for (let s of steps) if (s >= target) return s;
+  return 600;
+}
+
+function tlSegColor(idx) {
+  let hues = [38, 205, 340, 160, 260, 90, 300, 20];
+  return `hsla(${hues[idx % hues.length]}, 70%, 60%, 0.6)`;
+}
+
+const TL_HEADER_H = 16;   // timeline header height (time labels)
+const TL_ROW_H = 22;      // height of one obstacle track
+const TL_GUTTER = 26;     // left label gutter (track numbers)
+
+function drawTimeline() {
+  let bar = document.getElementById('timeline-bar');
+  let c = document.getElementById('timeline-canvas');
+  if (!bar || !c) return;
+  let T = timelineDuration;
+  let W = bar.clientWidth;
+  if (W <= 0) return;
+  let H = TL_HEADER_H + obstacles.length * TL_ROW_H + 4;
+  bar.style.height = H + 'px';
+  c.style.width = W + 'px';
+  c.style.height = H + 'px';
+  if (c.width !== W) c.width = W;
+  if (c.height !== H) c.height = H;
+  let ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  let t2x = (t) => TL_GUTTER + (t / T) * (W - TL_GUTTER);
+
+  // gutter (track labels) + separator
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx.fillRect(0, 0, TL_GUTTER, H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(TL_GUTTER, 0); ctx.lineTo(TL_GUTTER, H); ctx.stroke();
+
+  // gridlines + time labels (header band)
+  let step = niceTimeStep(T, W - TL_GUTTER);
+  ctx.font = '8px Courier New';
+  for (let t = 0; t <= T; t += step) {
+    let x = t2x(t);
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillText(fmtDur(t), Math.min(x + 3, W - 30), 9);
+  }
+
+  // one track (row) per obstacle, with one or more clips per track
+  for (let i = 0; i < obstacles.length; i++) {
+    let ob = obstacles[i];
+    let rowY = TL_HEADER_H + i * TL_ROW_H;
+    let clips = ob.clips || [];
+    // alternating row tint + separator
+    ctx.fillStyle = (i % 2) ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.045)';
+    ctx.fillRect(TL_GUTTER, rowY, W - TL_GUTTER, TL_ROW_H);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(TL_GUTTER, rowY + TL_ROW_H - 1, W - TL_GUTTER, 1);
+    // track number label (in the gutter)
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText(String(i + 1), 8, rowY + TL_ROW_H - 8);
+    // clips
+    let segY = rowY + 3, segH = TL_ROW_H - 6;
+    for (let ci = 0; ci < clips.length; ci++) {
+      let c = clips[ci];
+      let start = ((c.start || 0) % T + T) % T;
+      let dur = (c.dur == null) ? DEFAULT_OBJ_DUR : c.dur;
+      let sel = (i === selectedIdx && ci === selectedClip);
+      ctx.lineWidth = sel ? 2 : 1;
+      if (dur >= T) {
+        ctx.fillStyle = 'rgba(255,200,100,0.18)';
+        ctx.fillRect(TL_GUTTER, segY, W - TL_GUTTER, segH);
+        ctx.strokeStyle = sel ? 'rgba(255,255,255,0.95)' : 'rgba(255,200,100,0.25)';
+        ctx.strokeRect(TL_GUTTER, segY, W - TL_GUTTER, segH);
+      } else {
+        let x0 = t2x(start), x1 = t2x(start + dur);
+        ctx.fillStyle = tlSegColor(i);
+        ctx.strokeStyle = sel ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.3)';
+        if (x1 <= W) {
+          ctx.fillRect(x0, segY, x1 - x0, segH);
+          ctx.strokeRect(x0, segY, x1 - x0, segH);
+        } else {  // wraps around loop end
+          ctx.fillRect(x0, segY, W - x0, segH);
+          ctx.fillRect(TL_GUTTER, segY, x1 - W, segH);
+          ctx.strokeRect(x0, segY, W - x0, segH);
+          ctx.strokeRect(TL_GUTTER, segY, x1 - W, segH);
+        }
+      }
+    }
+  }
+
+  // playhead (spans all tracks)
+  let loopT = timelineLoopTime();
+  let px = t2x(loopT);
+  ctx.strokeStyle = 'rgba(255,120,80,0.95)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
+}
+
+function timelineMouseDown(e) {
+  if (!timelineEnabled) return;
+  let c = e.currentTarget, rect = c.getBoundingClientRect();
+  let mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  let T = timelineDuration, W = rect.width, axisW = W - TL_GUTTER;
+  let row = Math.floor((my - TL_HEADER_H) / TL_ROW_H);
+  if (row < 0 || row >= obstacles.length) return;
+  let ob = obstacles[row];
+  let clips = ob.clips || [];
+  let t2x = (t) => TL_GUTTER + (t / T) * axisW;
+  let x2t = (x) => ((x - TL_GUTTER) / axisW) * T;
+  let edge = 6;
+  selectedIdx = row;
+
+  // gutter click = select obstacle only (no clip)
+  if (mx < TL_GUTTER) { selectedClip = -1; drawTimeline(); return; }
+
+  // hit-test clips (topmost first)
+  for (let ci = clips.length - 1; ci >= 0; ci--) {
+    let c = clips[ci];
+    let start = ((c.start || 0) % T + T) % T;
+    let dur = (c.dur == null) ? DEFAULT_OBJ_DUR : c.dur;
+    if (dur >= T) {
+      // full-loop clip: clicking materializes it into a finite clip centered here
+      let clickT = x2t(mx);
+      c.dur = DEFAULT_OBJ_DUR;
+      c.start = ((clickT - DEFAULT_OBJ_DUR / 2) % T + T) % T;
+      selectedClip = ci;
+      tlDrag = { mode: 'move', obstacleIdx: row, clipIdx: ci, grabX: mx, origStart: c.start, origDur: c.dur };
+      drawTimeline();
+      return;
+    }
+    let x0 = t2x(start), x1 = t2x(start + dur);
+    if (Math.abs(mx - x0) <= edge) { selectedClip = ci; tlDrag = { mode: 'resize-l', obstacleIdx: row, clipIdx: ci, grabX: mx, origStart: start, origDur: dur }; drawTimeline(); return; }
+    let x1e = (x1 > W) ? (x1 - W) : x1;
+    if (Math.abs(mx - x1e) <= edge) { selectedClip = ci; tlDrag = { mode: 'resize-r', obstacleIdx: row, clipIdx: ci, grabX: mx, origStart: start, origDur: dur }; drawTimeline(); return; }
+    let onBody = (x1 <= W) ? (mx >= x0 && mx <= x1) : (mx >= x0 || mx <= (x1 - W));
+    if (onBody) { selectedClip = ci; tlDrag = { mode: 'move', obstacleIdx: row, clipIdx: ci, grabX: mx, origStart: start, origDur: dur }; drawTimeline(); return; }
+  }
+
+  // empty area: begin a pending-create drag (a short click just deselects; a drag
+  // adds a new clip for this object spanning the dragged range)
+  selectedClip = -1;
+  tlDrag = { mode: 'create-pending', obstacleIdx: row, grabX: mx, startX: mx };
+  drawTimeline();
+}
+
+function timelineMouseMove(e) {
+  let c = document.getElementById('timeline-canvas');
+  let rect = c.getBoundingClientRect();
+  let mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  let T = timelineDuration, W = rect.width, axisW = W - TL_GUTTER;
+  let x2t = (x) => ((x - TL_GUTTER) / axisW) * T;
+
+  if (tlDrag) {
+    if (tlDrag.mode === 'create-pending') {
+      if (Math.abs(mx - tlDrag.startX) > 3) {
+        let ob = obstacles[tlDrag.obstacleIdx];
+        let clip = { start: x2t(Math.min(tlDrag.grabX, mx)), dur: 1 };
+        ob.clips.push(clip);
+        tlDrag.mode = 'create';
+        tlDrag.clipIdx = ob.clips.length - 1;
+        selectedIdx = tlDrag.obstacleIdx;
+        selectedClip = tlDrag.clipIdx;
+      } else {
+        return;   // not yet a drag
+      }
+    }
+    if (tlDrag.mode === 'create') {
+      let ob = obstacles[tlDrag.obstacleIdx];
+      let clip = ob.clips[tlDrag.clipIdx];
+      let ta = x2t(Math.min(tlDrag.grabX, mx));
+      let tb = x2t(Math.max(tlDrag.grabX, mx));
+      clip.start = ((ta % T) + T) % T;
+      clip.dur = Math.max(1, Math.min(T, tb - ta));
+      drawTimeline();
+      return;
+    }
+    // move / resize an existing clip
+    let dx = ((mx - tlDrag.grabX) / axisW) * T;
+    let ob = obstacles[tlDrag.obstacleIdx];
+    let clip = ob.clips[tlDrag.clipIdx];
+    if (tlDrag.mode === 'move') {
+      clip.start = ((tlDrag.origStart + dx) % T + T) % T;
+    } else if (tlDrag.mode === 'resize-r') {
+      let nd = Math.min(T, tlDrag.origDur + dx);
+      if (nd >= 1) clip.dur = nd;
+    } else if (tlDrag.mode === 'resize-l') {
+      let nd = Math.min(T, tlDrag.origDur - dx);
+      if (nd >= 1) { clip.dur = nd; clip.start = ((tlDrag.origStart + dx) % T + T) % T; }
+    }
+    drawTimeline();
+    return;
+  }
+
+  // hover: cursor feedback (resize edge / grab body / copy on empty track)
+  if (!timelineEnabled) return;
+  let row = Math.floor((my - TL_HEADER_H) / TL_ROW_H);
+  if (row < 0 || row >= obstacles.length || mx < TL_GUTTER) { c.style.cursor = 'default'; return; }
+  let ob = obstacles[row];
+  let clips = ob.clips || [];
+  let t2x = (t) => TL_GUTTER + (t / T) * axisW;
+  for (let ci = clips.length - 1; ci >= 0; ci--) {
+    let c = clips[ci];
+    let dur = (c.dur == null) ? DEFAULT_OBJ_DUR : c.dur;
+    if (dur >= T) continue;
+    let start = ((c.start || 0) % T + T) % T;
+    let x0 = t2x(start), x1 = t2x(start + dur);
+    let x1e = (x1 > W) ? (x1 - W) : x1;
+    if (Math.abs(mx - x0) <= 6 || Math.abs(mx - x1e) <= 6) { c.style.cursor = 'ew-resize'; return; }
+    let onBody = (x1 <= W) ? (mx >= x0 && mx <= x1) : (mx >= x0 || mx <= (x1 - W));
+    if (onBody) { c.style.cursor = 'grab'; return; }
+  }
+  c.style.cursor = 'copy';   // empty track: drag to add a clip
+}
+
+function timelineMouseUp() {
+  if (tlDrag && tlDrag.mode === 'create-pending') {
+    selectedClip = -1;   // short click on empty area = deselect (no clip created)
+    drawTimeline();
+  }
+  tlDrag = null;
+}
+
+function updateTimelineVisibility() {
+  let bar = document.getElementById('timeline-bar');
+  let btn = document.getElementById('toggle-timeline');
+  bar.style.display = timelineEnabled ? 'block' : 'none';
+  btn.textContent = timelineEnabled ? 'on' : 'off';
+  btn.style.color = timelineEnabled ? 'rgba(255,200,100,0.8)' : 'rgba(255,255,255,0.2)';
+  btn.style.borderColor = timelineEnabled ? 'rgba(255,200,100,0.4)' : 'rgba(255,255,255,0.08)';
+  if (timelineEnabled) drawTimeline();
 }
 
 // ─────────────────────────────────────────────
