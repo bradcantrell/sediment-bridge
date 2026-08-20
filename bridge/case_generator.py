@@ -424,6 +424,40 @@ RAS
 """
 
 
+def generate_momentum_transport() -> str:
+    """k-epsilon turbulence model for channel flow — OpenFOAM v14 format.
+
+    v14 consolidated turbulence dictionaries into constant/momentumTransport
+    (RASModel -> model rename). Written alongside the legacy turbulenceProperties
+    file for fallback compatibility.
+    """
+    return r"""/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v14                                   |
+|   \\  /    A nd           | Website:  www.openfoam.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      momentumTransport;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+simulationType  RAS;
+
+RAS
+{
+    model           kEpsilon;
+    turbulence      on;
+    printCoeffs     on;
+}
+"""
+
+
 def generate_transport_properties() -> str:
     """Water transport properties."""
     return r"""/*--------------------------------*- C++ -*----------------------------------*\
@@ -819,6 +853,9 @@ def create_case(state: SimState, case_dir: Path):
     const_dir.mkdir(exist_ok=True)
     (const_dir / "transportProperties").write_text(generate_transport_properties())
     (const_dir / "turbulenceProperties").write_text(generate_turbulence_properties())
+    # OpenFOAM v14 format (constant/momentumTransport) — written alongside the
+    # legacy file for fallback compatibility (v14 reads momentumTransport first).
+    (const_dir / "momentumTransport").write_text(generate_momentum_transport())
 
     # TriSurface directory for STL files
     tri_dir = const_dir / "triSurface"
@@ -853,7 +890,7 @@ def run_case(case_dir: Path) -> dict:
     results = {"success": False, "steps": {}}
 
     # Need to source OpenFOAM environment first
-    of_prefix = "source /usr/share/openfoam/etc/bashrc && "
+    of_prefix = "source /opt/openfoam14/etc/bashrc && "
 
     steps = [
         ("blockMesh", f"{of_prefix} blockMesh -case {case_dir}"),
