@@ -39,11 +39,14 @@ NZ_BG = 1     # Single cell in z
 
 @dataclass
 class Obstacle:
-    type: str       # 'circle' or 'square'
-    x: float        # px
-    y: float        # px
-    size: float     # px (diameter or side length)
+    type: str       # 'circle', 'rect', or 'poly'
+    x: float        # px (centroid)
+    y: float        # px (centroid)
     rotation: float = 0.0  # degrees
+    w: float = 0.0  # px width (rect / circle diameter)
+    h: float = 0.0  # px height (rect)
+    size: float = 0.0  # legacy px (diameter or side) — fallback
+    points: list = field(default_factory=list)  # polygon px points, relative to centroid
 
 
 @dataclass
@@ -99,12 +102,12 @@ def generate_stl_circle(cx_m: float, cy_m: float, radius_m: float,
     return f"solid {name}\n" + "".join(triangles) + f"endsolid {name}\n"
 
 
-def generate_stl_square(cx_m: float, cy_m: float, half_m: float,
-                        rotation_deg: float, z_min: float, z_max: float) -> str:
-    """Generate ASCII STL for an extruded and rotated square."""
-    # Vertices of square in local coords
-    corners = [(-half_m, -half_m), (half_m, -half_m),
-               (half_m, half_m), (-half_m, half_m)]
+def generate_stl_rect(cx_m: float, cy_m: float, half_w: float, half_h: float,
+                      rotation_deg: float, z_min: float, z_max: float) -> str:
+    """Generate ASCII STL for an extruded and rotated rectangle."""
+    # Vertices of rectangle in local coords
+    corners = [(-half_w, -half_h), (half_w, -half_h),
+               (half_w, half_h), (-half_w, half_h)]
     # Rotate
     rad = math.radians(rotation_deg)
     cos_a, sin_a = math.cos(rad), math.sin(rad)
@@ -151,7 +154,51 @@ def generate_stl_square(cx_m: float, cy_m: float, half_m: float,
                          (rotated[2][0], rotated[2][1], z),
                          (rotated[3][0], rotated[3][1], z), 0, 0, nz)
 
-    name = f"square_{cx_m:.2f}_{cy_m:.2f}"
+    name = f"rect_{cx_m:.2f}_{cy_m:.2f}"
+    return f"solid {name}\n" + "".join(triangles) + f"endsolid {name}\n"
+
+
+def generate_stl_polygon(pts_m, z_min, z_max):
+    """Generate ASCII STL for an extruded arbitrary polygon (pts_m = world meters, y flipped)."""
+    n = len(pts_m)
+    triangles = []
+
+    def add_triangle(v1, v2, v3, nx, ny, nz):
+        triangles.append(f"  facet normal {nx:.6e} {ny:.6e} {nz:.6e}\n"
+                         f"    outer loop\n"
+                         f"      vertex {v1[0]:.6e} {v1[1]:.6e} {v1[2]:.6e}\n"
+                         f"      vertex {v2[0]:.6e} {v2[1]:.6e} {v2[2]:.6e}\n"
+                         f"      vertex {v3[0]:.6e} {v3[1]:.6e} {v3[2]:.6e}\n"
+                         f"    endloop\n"
+                         f"  endfacet\n")
+
+    cx = sum(p[0] for p in pts_m) / n
+    cy = sum(p[1] for p in pts_m) / n
+
+    for i in range(n):
+        x0, y0 = pts_m[i]
+        x1, y1 = pts_m[(i + 1) % n]
+        dx, dy = x1 - x0, y1 - y0
+        length = math.sqrt(dx * dx + dy * dy)
+        if length == 0:
+            continue
+        nx, ny = -dy / length, dx / length
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        if nx * (mx - cx) + ny * (my - cy) < 0:
+            nx, ny = -nx, -ny
+        add_triangle((x0, y0, z_min), (x1, y1, z_min), (x1, y1, z_max), nx, ny, 0)
+        add_triangle((x0, y0, z_min), (x1, y1, z_max), (x0, y0, z_max), nx, ny, 0)
+
+    for z, nz in [(z_min, -1.0), (z_max, 1.0)]:
+        for i in range(n):
+            x0, y0 = pts_m[i]
+            x1, y1 = pts_m[(i + 1) % n]
+            if nz > 0:
+                add_triangle((cx, cy, z), (x0, y0, z), (x1, y1, z), 0, 0, nz)
+            else:
+                add_triangle((cx, cy, z), (x1, y1, z), (x0, y0, z), 0, 0, nz)
+
+    name = f"poly_{n}"
     return f"solid {name}\n" + "".join(triangles) + f"endsolid {name}\n"
 
 
@@ -864,12 +911,22 @@ def create_case(state: SimState, case_dir: Path):
     for i, ob in enumerate(state.obstacles):
         cx_m = px_to_m(ob.x)
         cy_m = px_to_m(DOMAIN_H / SCALE - ob.y)  # Flip y: canvas y=0 → top, OpenFOAM y=0 → bottom
-        half_m = px_to_m(ob.size) / 2
         if ob.type == "circle":
-            radius_m = half_m
-            stl_content = generate_stl_circle(cx_m, cy_m, radius_m, z_min, z_max)
+            r_m = px_to_m((ob.w or ob.size) / 2)
+            stl_content = generate_stl_circle(cx_m, cy_m, r_m, z_min, z_max)
+        elif ob.type == "poly":
+            a = math.radians(ob.rotation or 0.0)
+            cosA, sinA = math.cos(a), math.sin(a)
+            pts_m = []
+            for px, py in ob.points:
+                wx = ob.x + px * cosA - py * sinA
+                wy = ob.y + px * sinA + py * cosA
+                pts_m.append((px_to_m(wx), px_to_m(DOMAIN_H / SCALE - wy)))
+            stl_content = generate_stl_polygon(pts_m, z_min, z_max)
         else:
-            stl_content = generate_stl_square(cx_m, cy_m, half_m, ob.rotation, z_min, z_max)
+            hw = px_to_m((ob.w or ob.size) / 2)
+            hh = px_to_m((ob.h or ob.size) / 2)
+            stl_content = generate_stl_rect(cx_m, cy_m, hw, hh, ob.rotation, z_min, z_max)
         (tri_dir / f"obstacle{i}.stl").write_text(stl_content)
 
     # Time directory 0

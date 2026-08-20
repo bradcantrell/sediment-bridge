@@ -60,8 +60,11 @@ class JobManager:
                     type=ob["type"],
                     x=ob["x"],
                     y=ob["y"],
+                    rotation=ob.get("rotation", 0),
+                    w=ob.get("w", ob.get("size", 40)),
+                    h=ob.get("h", ob.get("size", 40)),
                     size=ob.get("size", 40),
-                    rotation=ob.get("rotation", 0)
+                    points=[(p["x"], p["y"]) for p in ob.get("points") or []]
                 ))
             state = SimState(
                 obstacles=obstacles,

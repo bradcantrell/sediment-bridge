@@ -1850,7 +1850,7 @@ async function bakeToOpenFOAM() {
   if (baking) return; baking=true;
   const btn=document.getElementById('bake-btn'), result=document.getElementById('bake-result');
   btn.textContent='⟳ BAKING...'; btn.className='baking'; result.innerHTML='sending state...';
-  const state={obstacles:obstacles.map(o=>({type:o.type,x:o.x,y:o.y,size:o.size,rotation:o.rotation})),inflow:inflowVel,width,height,depo_png:depoBuffer.elt.toDataURL('image/png'),bed_profile:bedPoints,bed_xsections:bedXSections};
+  const state={obstacles:obstacles.map(o=>({type:o.type,x:o.x,y:o.y,w:o.w,h:o.h,rotation:o.rotation,points:(o.points&&o.type==='poly')?o.points.map(p=>({x:p.x,y:p.y})):undefined})),inflow:inflowVel,width,height,depo_png:depoBuffer.elt.toDataURL('image/png'),bed_profile:bedPoints,bed_xsections:bedXSections};
   try {
     const resp=await fetch(BRIDGE_URL+'/bake',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
     const data=await resp.json();
