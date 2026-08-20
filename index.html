@@ -206,7 +206,7 @@ let erosionProb = 0.02;
 const DEPO_CELL = 4;        // deposition grid cell size (px)
 const DEPO_MAX = 160;       // max accumulated deposit height (px)
 const DEPO_AMOUNT = 4.0;    // bed height added per deposited particle (px)
-let GW = 0, GH = 0, depoGrid = null;
+let GW = 0, GH = 0, depoGrid = null, userBedGrid = null;
 let bedRenderAcc = 0;       // timer for periodic bed-surface re-render
 
 // ─────────────────────────────────────────────
@@ -284,7 +284,7 @@ let dragOffX, dragOffY;
 function getStationZ(station, y) {
   let xsData = bedXSections.find(xs => xs.x === station.x);
   if (!xsData || xsData.points.length < 2) return station.z;
-  let pts = [...xsData.points].sort((a, b) => a.y - b.y);
+  let pts = xsData.points; // kept sorted (sorted on push; pop preserves order)
   if (y <= pts[0].y) return station.z + pts[0].z;
   if (y >= pts[pts.length - 1].y) return station.z + pts[pts.length - 1].z;
   for (let k = 0; k < pts.length - 1; k++) {
@@ -296,7 +296,7 @@ function getStationZ(station, y) {
   return station.z;
 }
 
-function userBedZ(x, y) {
+function computeUserBedZ(x, y) {
   if (bedPoints.length < 2) return 0;
   if (x <= bedPoints[0].x) return getStationZ(bedPoints[0], y);
   if (x >= bedPoints[bedPoints.length - 1].x) return getStationZ(bedPoints[bedPoints.length - 1], y);
@@ -307,6 +307,30 @@ function userBedZ(x, y) {
     }
   }
   return 0;
+}
+
+// Fast bilinear lookup of the cached user-drawn bed height (same grid as depoGrid).
+function userBedZ(x, y) {
+  if (!userBedGrid || bedPoints.length < 2) return 0;
+  let fx = x / DEPO_CELL - 0.5, fy = y / DEPO_CELL - 0.5;
+  let i = Math.floor(fx), j = Math.floor(fy);
+  if (i < 0 || j < 0 || i >= GW - 1 || j >= GH - 1) return 0;
+  let tx = fx - i, ty = fy - j;
+  let a = userBedGrid[j * GW + i], b = userBedGrid[j * GW + i + 1];
+  let c = userBedGrid[(j + 1) * GW + i], d = userBedGrid[(j + 1) * GW + i + 1];
+  return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+}
+
+// Rebuild the cached bed grid from the exact (slow) interpolation.
+// Called on bed edits and before each bed-surface re-render (~GW*GH samples).
+function rebuildUserBedGrid() {
+  if (!userBedGrid) return;
+  for (let j = 0; j < GH; j++) {
+    let y = (j + 0.5) * DEPO_CELL;
+    for (let i = 0; i < GW; i++) {
+      userBedGrid[j * GW + i] = computeUserBedZ((i + 0.5) * DEPO_CELL, y);
+    }
+  }
 }
 
 // Combined bed height = user-drawn bed + accumulated deposition (aggradation).
@@ -768,6 +792,7 @@ function drawParticles() {
 
 // ── Bed surface render ──
 function updateBedBuffer() {
+  rebuildUserBedGrid();
   bedSurface.clear();
   let bedMaxZ=160, step=8;
   bedSurface.noStroke();
@@ -779,7 +804,7 @@ function updateBedBuffer() {
       bedSurface.rect(px,py,step,step);
     }
   }
-  let cStep=2, levels=[20,40,60,80,100,120,140];
+  let cStep=4, levels=[20,40,60,80,100,120,140];
   for (let lvl of levels) {
     let lAlpha=25+(lvl/bedMaxZ)*50;
     for (let py=0; py<height; py+=cStep) {
@@ -808,7 +833,7 @@ function updateBedBuffer() {
 }
 
 function drawBedProfile() {
-  if (bedPoints.length < 2 && !bedMode) return;
+  if (!bedMode) return;
   let stripH=160, stripY=height-stripH, bedMaxZ=160;
 
   noStroke(); fill(10,12,22,200); rect(0,stripY,width,stripH);
@@ -1001,7 +1026,7 @@ function setup() {
   bedSurface.background(0, 0);
   GW = Math.ceil(width / DEPO_CELL) + 1;
   GH = Math.ceil(height / DEPO_CELL) + 1;
-  depoGrid = new Float32Array(GW * GH);
+  depoGrid = new Float32Array(GW * GH); userBedGrid = new Float32Array(GW * GH);
   updateBedBuffer();
 
   bedThumb = document.getElementById('bed-thumb').getContext('2d');
@@ -1560,7 +1585,7 @@ function updateTimelineVisibility() {
 // ─────────────────────────────────────────────
 // OPENFOAM BRIDGE
 // ─────────────────────────────────────────────
-const BRIDGE_URL = 'http://localhost:8090';
+const BRIDGE_URL = 'http://192.168.1.129:8090';
 let baking = false;
 let comparisonData = null;
 let showComparison = false;
