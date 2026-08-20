@@ -890,7 +890,7 @@ def run_case(case_dir: Path) -> dict:
     results = {"success": False, "steps": {}}
 
     # Need to source OpenFOAM environment first
-    of_prefix = "source /opt/openfoam14/etc/bashrc && "
+    of_prefix = "export ParaView_TYPE=none && source /opt/openfoam14/etc/bashrc && "
 
     steps = [
         ("blockMesh", f"{of_prefix} blockMesh -case {case_dir}"),

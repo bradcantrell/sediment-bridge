@@ -82,7 +82,7 @@ class JobManager:
             bed_xsections = state_dict.get("bed_xsections", [])
             has_bed = len(bed_profile) >= 2  # Need at least 2 points for a profile
             
-            of_prefix = "source /opt/openfoam14/etc/bashrc && "
+            of_prefix = "export ParaView_TYPE=none && source /opt/openfoam14/etc/bashrc && "
             
             if has_bed:
                 # Standard blockMesh first, then displace bottom vertices
