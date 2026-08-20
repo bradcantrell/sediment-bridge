@@ -389,17 +389,20 @@ function buildSolidMask() {
   for (let ob of obstacles) {
     if (!isObstacleActive(ob)) continue;
     if (ob.type === 'poly') {
-      let pts = ob.points;
-      let gp = pts.map(p => ({ x: p.x / cellW, y: p.y / cellH }));
+      let a = ob.rotation * PI / 180, cosA = cos(a), sinA = sin(a);
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (let p of gp) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
-      let i0 = max(1, floor(minX)), i1 = min(NX, ceil(maxX));
-      let j0 = max(1, floor(minY)), j1 = min(NY, ceil(maxY));
+      for (let p of ob.points) {
+        let wx = ob.x + p.x * cosA - p.y * sinA, wy = ob.y + p.x * sinA + p.y * cosA;
+        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx; if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+      }
+      let i0 = max(1, floor(minX / cellW)), i1 = min(NX, ceil(maxX / cellW));
+      let j0 = max(1, floor(minY / cellH)), j1 = min(NY, ceil(maxY / cellH));
       for (let j = j0; j <= j1; j++) {
         for (let i = i0; i <= i1; i++) {
           let idx = IX(i, j);
           if (solid[idx]) continue;
-          if (pointInPoly(i, j, gp)) solid[idx] = 1;
+          let lp = polyToLocal(ob, i * cellW, j * cellH);
+          if (pointInPoly(lp.x, lp.y, ob.points)) solid[idx] = 1;
         }
       }
       continue;
@@ -551,7 +554,7 @@ function isObstacleActive(ob) {
 function isInsideObstacle(px, py) {
   for (let ob of obstacles) {
     if (!isObstacleActive(ob)) continue;
-    if (ob.type === 'poly') { if (pointInPoly(px, py, ob.points)) return true; continue; }
+    if (ob.type === 'poly') { let lp = polyToLocal(ob, px, py); if (pointInPoly(lp.x, lp.y, ob.points)) return true; continue; }
     let dx = px - ob.x, dy = py - ob.y;
     if (ob.type === 'circle') {
       if (dx*dx + dy*dy <= (obW(ob)/2)*(obW(ob)/2)) return true;
@@ -629,21 +632,24 @@ function updateParticles() {
           if (d >= r || d === 0) continue;
           nx = dx / d; ny = dy / d; pen = r - d;
         } else if (ob.type === 'poly') {
-          if (!pointInPoly(p.x, p.y, ob.points)) continue;
+          let lp = polyToLocal(ob, p.x, p.y);
+          if (!pointInPoly(lp.x, lp.y, ob.points)) continue;
           let pts = ob.points, n = pts.length, bestA = null, bestB = null, bestD = Infinity;
           for (let k = 0; k < n; k++) {
             let a = pts[k], b = pts[(k + 1) % n];
-            let dd = distToSeg(p.x, p.y, a.x, a.y, b.x, b.y);
+            let dd = distToSeg(lp.x, lp.y, a.x, a.y, b.x, b.y);
             if (dd < bestD) { bestD = dd; bestA = a; bestB = b; }
           }
           if (!bestA) continue;
           let ex = bestB.x - bestA.x, ey = bestB.y - bestA.y;
           let len = Math.sqrt(ex * ex + ey * ey) || 1;
           let n1x = -ey / len, n1y = ex / len;
-          let pc = polyCentroid(pts);
           let mxx = (bestA.x + bestB.x) / 2, myy = (bestA.y + bestB.y) / 2;
-          let away = (n1x * (pc.x - mxx) + n1y * (pc.y - myy)) < 0 ? 1 : -1;
-          nx = away * n1x; ny = away * n1y; pen = bestD;
+          let away = (n1x * mxx + n1y * myy) >= 0 ? 1 : -1;
+          let lnx = away * n1x, lny = away * n1y;
+          let ra = ob.rotation * PI / 180, rcos = cos(ra), rsin = sin(ra);
+          nx = lnx * rcos - lny * rsin; ny = lnx * rsin + lny * rcos;
+          pen = bestD;
         } else {
           let a = -ob.rotation * PI / 180, cosA = Math.cos(a), sinA = Math.sin(a);
           let rx = dx * cosA - dy * sinA, ry = dx * sinA + dy * cosA;
@@ -797,6 +803,7 @@ function drawObstacles() {
     if (!isObstacleActive(ob)) continue;
 
     if (ob.type === 'poly') {
+      push(); translate(ob.x, ob.y); rotate(ob.rotation*PI/180);
       if (i===selectedIdx) { stroke(255,255,255,220); strokeWeight(2.5); }
       else { stroke(255,255,255,140); strokeWeight(1.5); }
       noFill();
@@ -808,9 +815,9 @@ function drawObstacles() {
         beginShape(); for (let p of ob.points) vertex(p.x, p.y); endShape(CLOSE);
         for (let p of ob.points) { noStroke(); fill(255,200,100,230); ellipse(p.x, p.y, 8, 8); }
       }
-      let c = polyCentroid(ob.points);
+      pop();
       fill(255,255,255,220); noStroke(); textAlign(CENTER, CENTER); textSize(12);
-      text(String(i + 1), c.x, c.y);
+      text(String(i + 1), ob.x, ob.y);
       continue;
     }
 
@@ -1317,9 +1324,16 @@ function polyCentroid(pts) {
   return { x: cx / pts.length, y: cy / pts.length };
 }
 
+function polyToLocal(ob, wx, wy) {
+  let a = -ob.rotation * PI / 180, cosA = cos(a), sinA = sin(a);
+  let dx = wx - ob.x, dy = wy - ob.y;
+  return { x: dx * cosA - dy * sinA, y: dx * sinA + dy * cosA };
+}
+
 function hitPolyVertex(ob, mx, my) {
+  let lp = polyToLocal(ob, mx, my);
   for (let i = 0; i < ob.points.length; i++) {
-    if (dist(mx, my, ob.points[i].x, ob.points[i].y) < 9) return i;
+    if (dist(lp.x, lp.y, ob.points[i].x, ob.points[i].y) < 9) return i;
   }
   return -1;
 }
@@ -1391,10 +1405,11 @@ function hitTestObstacle(mx, my) {
     let ob=obstacles[i];
     if (!isObstacleActive(ob)) continue;
     if (ob.type==='poly') {
-      if (pointInPoly(mx, my, ob.points)) return i;
+      let lp = polyToLocal(ob, mx, my);
+      if (pointInPoly(lp.x, lp.y, ob.points)) return i;
       for (let k=0;k<ob.points.length;k++) {
         let a=ob.points[k], b=ob.points[(k+1)%ob.points.length];
-        if (distToSeg(mx, my, a.x, a.y, b.x, b.y) < 6) return i;
+        if (distToSeg(lp.x, lp.y, a.x, a.y, b.x, b.y) < 6) return i;
       }
       continue;
     }
@@ -1414,7 +1429,8 @@ function addObstacle(x, y, type, rot) {
 }
 
 function addPolyObstacle(pts) {
-  obstacles.push({ type: 'poly', x: 0, y: 0, rotation: 0, points: pts.map(p => ({ x: p.x, y: p.y })), clips: [{ start: 0, dur: timelineDuration }] });
+  let c = polyCentroid(pts);
+  obstacles.push({ type: 'poly', x: c.x, y: c.y, rotation: 0, points: pts.map(p => ({ x: p.x - c.x, y: p.y - c.y })), clips: [{ start: 0, dur: timelineDuration }] });
 }
 
 function deleteObstacle(idx) { if (idx>=0&&idx<obstacles.length) obstacles.splice(idx,1); }
@@ -1507,7 +1523,7 @@ function mouseDragged(event) {
     return;
   }
   if (resizeDrag) { resizeObstacle(resizeDrag, mouseX, mouseY); return; }
-  if (polyVertexDrag) { let pv=obstacles[polyVertexDrag.idx]; pv.points[polyVertexDrag.vi]={x:mouseX,y:mouseY}; return; }
+  if (polyVertexDrag) { let pv=obstacles[polyVertexDrag.idx]; let lp=polyToLocal(pv,mouseX,mouseY); pv.points[polyVertexDrag.vi]={x:lp.x,y:lp.y}; return; }
   if (dragging&&selectedIdx>=0) { obstacles[selectedIdx].x=mouseX+dragOffX; obstacles[selectedIdx].y=mouseY+dragOffY; }
 }
 
