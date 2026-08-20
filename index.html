@@ -1540,7 +1540,7 @@ function mouseWheel(event) {
 function keyPressed() {
   if (key===' ') { paused=!paused; }
   else if (key==='r'||key==='R') {
-    simTime=0; initParticles(); depoBuffer.clear(); trailBuffer.clear();
+    simTime=0; initParticles(); depoBuffer.clear(); trailBuffer.clear(); deposited=[];
     if (depoGrid) depoGrid.fill(0);
     bedSurface.clear(); updateBedBuffer();
     // Restart preserves bed (bedPoints/bedXSections) and obstacle placement.
@@ -1576,7 +1576,6 @@ function keyPressed() {
   else if (key==='m'||key==='M') { bedMode=!bedMode; if(bedMode)paused=true; }
   else if (key==='s'||key==='S') { saveCanvas('sediment-'+floor(simTime),'png'); }
   else if (key==='b'||key==='B') { bakeToOpenFOAM(); }
-  else if (key==='r'||key==='R') { depoBuffer.clear(); deposited=[]; initParticles(); simTime=0; }
   return false;
 }
 
