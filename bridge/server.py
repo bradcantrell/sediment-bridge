@@ -7,6 +7,8 @@ GET /status — returns current job progress
 """
 
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -22,6 +24,27 @@ from case_generator import SimState, Obstacle, create_case, generate_initial_U
 
 PORT = 8090
 CASE_DIR = Path(__file__).parent / "bake_case"
+
+
+def _run_shell(cmd, timeout):
+    """Run a shell command in its own process group so a timeout kills the whole
+    tree (bash + grandchildren like pvdataserver), not just the shell. Prevents
+    orphan leaks on failed bakes."""
+    proc = subprocess.Popen(
+        cmd, shell=True, executable='/bin/bash',
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=True
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        proc.communicate()
+        raise
+    return proc, stdout, stderr
 
 
 class JobManager:
@@ -90,13 +113,9 @@ class JobManager:
             if has_bed:
                 # Standard blockMesh first, then displace bottom vertices
                 self._update(job_id, "blockMesh", 15)
-                proc = subprocess.run(
-                    of_prefix + f"blockMesh -case {CASE_DIR}",
-                    shell=True, executable='/bin/bash',
-                    capture_output=True, text=True, timeout=300
-                )
+                proc, _out, err = _run_shell(of_prefix + f"blockMesh -case {CASE_DIR}", 300)
                 if proc.returncode != 0:
-                    raise RuntimeError(f"blockMesh failed: {proc.stderr[-300:]}")
+                    raise RuntimeError(f"blockMesh failed: {err[-300:]}")
                 
                 # Displace bottom by bed heightfield
                 self._update(job_id, "displacing bed", 20)
@@ -105,23 +124,15 @@ class JobManager:
             else:
                 # Standard blockMesh with flat bottom
                 self._update(job_id, "blockMesh", 20)
-                proc = subprocess.run(
-                    of_prefix + f"blockMesh -case {CASE_DIR}",
-                    shell=True, executable='/bin/bash',
-                    capture_output=True, text=True, timeout=300
-                )
+                proc, _out, err = _run_shell(of_prefix + f"blockMesh -case {CASE_DIR}", 300)
                 if proc.returncode != 0:
-                    raise RuntimeError(f"blockMesh failed: {proc.stderr[-300:]}")
+                    raise RuntimeError(f"blockMesh failed: {err[-300:]}")
             
             # snappyHexMesh
             self._update(job_id, "snappyHexMesh", 40)
-            proc = subprocess.run(
-                of_prefix + f"snappyHexMesh -overwrite -case {CASE_DIR}",
-                shell=True, executable='/bin/bash',
-                capture_output=True, text=True, timeout=600
-            )
+            proc, _out, err = _run_shell(of_prefix + f"snappyHexMesh -overwrite -case {CASE_DIR}", 600)
             if proc.returncode != 0:
-                raise RuntimeError(f"snappyHexMesh failed: {proc.stderr[-300:]}")
+                raise RuntimeError(f"snappyHexMesh failed: {err[-300:]}")
             
             # Note: field files from create_case already have obstacle patches
             # that match the SimState. If snappy creates extra patches, 
@@ -133,7 +144,7 @@ class JobManager:
                 of_prefix + f"simpleFoam -case {CASE_DIR}",
                 shell=True, executable='/bin/bash',
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1
+                text=True, bufsize=1, start_new_session=True
             )
             
             last_time = 0
@@ -150,7 +161,15 @@ class JobManager:
                 pass
             
             # Ensure process finishes and check exit code
-            proc.wait(timeout=600)
+            try:
+                proc.wait(timeout=600)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                proc.wait()
+                raise
             if proc.returncode != 0:
                 raise RuntimeError(f"simpleFoam failed with exit code {proc.returncode}")
             
@@ -158,11 +177,7 @@ class JobManager:
             self._update(job_id, "parsing results", 98)
             
             # Run foamToVTK for cell-centered data
-            subprocess.run(
-                of_prefix + f"foamToVTK -latestTime -ascii -case {CASE_DIR}",
-                shell=True, executable='/bin/bash',
-                capture_output=True, text=True, timeout=60
-            )
+            _proc, _out, _err = _run_shell(of_prefix + f"foamToVTK -latestTime -ascii -case {CASE_DIR}", 60)
             velocity = self._parse_velocity_vtk()
             
             self._update(job_id, "complete", 100, result=velocity)
