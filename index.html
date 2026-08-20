@@ -126,7 +126,7 @@
     <div id="sidebar-stats" style="font-size:10px;color:rgba(255,255,255,0.4);line-height:1.6;margin-bottom:4px;">
       sim-time: <span class="hv" id="simtime">0.0</span>s &nbsp; mobile: <span class="hv" id="mobile">0</span><br>
       deposited: <span class="hv" id="deposited">0</span> &nbsp; obstacles: <span class="hv" id="obstacles">0</span><br>
-      shape: <span class="hv" id="shape">square</span> &phi;: <span class="hv" id="rot">0</span>&deg;<br>
+      shape: <span class="hv" id="shape">rect</span> &phi;: <span class="hv" id="rot">0</span>&deg;<br>
       <span class="hw" id="paused"></span>
     </div>
     <button id="bake-btn" style="width:100%;margin-bottom:4px;" onclick="bakeToOpenFOAM()">⚙ BAKE</button>
@@ -152,6 +152,11 @@
       <label style="font-size:9px;color:rgba(255,255,255,0.4);">slow <input type="color" id="slow-color" value="#ff44aa"></label>
       <label style="font-size:9px;color:rgba(255,255,255,0.4);">fast <input type="color" id="fast-color" value="#ddeeff"></label>
     </div>
+    <div class="ctrl-row"><label>depo size <span class="val" id="depo-size-val">6</span></label><input type="range" id="depo-size" min="2" max="16" value="6" step="0.5"></div>
+    <div class="ctrl-row2">
+      <label style="font-size:9px;color:rgba(255,255,255,0.4);">recent <input type="color" id="depo-recent" value="#ffcc55"></label>
+      <label style="font-size:9px;color:rgba(255,255,255,0.4);">oldest <input type="color" id="depo-oldest" value="#6b4f3a"></label>
+    </div>
     <div class="ctrl-row"><label>color thresh <span class="val" id="color-thresh-val">0.5</span></label><input type="range" id="color-thresh" min="0.1" max="1.5" value="0.5" step="0.05"></div>
     <div class="ctrl-row"><label>flow scale <span class="val" id="flow-scale-val">25</span></label><input type="range" id="flow-scale" min="5" max="60" value="25" step="1"></div>
     <div class="ctrl-row"><label>flow dens <span class="val" id="flow-dens-val">8</span></label><input type="range" id="flow-dens" min="3" max="20" value="8" step="1"></div>
@@ -175,7 +180,7 @@
 
 <div id="timeline-bar"><canvas id="timeline-canvas"></canvas></div>
 
-<div id="help" style="position:fixed;bottom:8px;left:50%;transform:translateX(-50%);font-size:10px;color:rgba(255,255,255,0.2);pointer-events:none;z-index:5;text-align:center;">1/2 shape &middot; wheel rotate &middot; click place &middot; drag move &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; M bed &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
+<div id="help" style="position:fixed;bottom:8px;left:50%;transform:translateX(-50%);font-size:10px;color:rgba(255,255,255,0.2);pointer-events:none;z-index:5;text-align:center;">1 circle &middot; 2 rect &middot; 3 freeform &middot; click place &middot; drag move &middot; drag handle resize &middot; wheel rotate &middot; [ ] size &middot; backspace delete &middot; F flow &middot; G grid &middot; H help &middot; M bed &middot; space pause &middot; S save &middot; <span style="color:#fa0">B bake</span></div>
 
 <script>
 // ─────────────────────────────────────────────
@@ -219,9 +224,12 @@ let p, divArr;
 let obstacles = [];
 let selectedIdx = -1;
 
-let ghostType = 'square';
+let ghostType = 'rect';
 let ghostRotation = 0;
 let ghostSize = 40;
+let resizeDrag = null;      // { idx, handle } active handle resize
+let polyVertexDrag = null;  // { idx, vi } active polygon-vertex drag
+let polyPoints = [];        // in-progress freeform polygon vertices
 
 // Timeline: choreograph obstacle existence through a looping time range.
 let timelineEnabled = false;
@@ -273,6 +281,9 @@ let flowDensity = 8;
 let flowOpacity = 140;
 let colorThresh = 0.5;
 let particleCount = 3000;
+let depoSize = 6;
+let depoRecentColor = '#ffcc55';
+let depoOldestColor = '#6b4f3a';
 
 let cellW, cellH;
 let dragging = false;
@@ -377,21 +388,38 @@ function buildSolidMask() {
   solid.fill(0);
   for (let ob of obstacles) {
     if (!isObstacleActive(ob)) continue;
-    let cx = ob.x / cellW, cy = ob.y / cellH, r = ob.size / 2;
-    let rg = r / ((cellW + cellH) / 2);
+    if (ob.type === 'poly') {
+      let pts = ob.points;
+      let gp = pts.map(p => ({ x: p.x / cellW, y: p.y / cellH }));
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (let p of gp) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
+      let i0 = max(1, floor(minX)), i1 = min(NX, ceil(maxX));
+      let j0 = max(1, floor(minY)), j1 = min(NY, ceil(maxY));
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          let idx = IX(i, j);
+          if (solid[idx]) continue;
+          if (pointInPoly(i, j, gp)) solid[idx] = 1;
+        }
+      }
+      continue;
+    }
+    let hw = obW(ob) / 2, hh = obH(ob) / 2;
+    let rg = max(hw, hh) / ((cellW + cellH) / 2);
+    let cx = ob.x / cellW, cy = ob.y / cellH;
     let i0 = max(1, floor(cx - rg - 1)), i1 = min(NX, ceil(cx + rg + 1));
     let j0 = max(1, floor(cy - rg - 1)), j1 = min(NY, ceil(cy + rg + 1));
     for (let j = j0; j <= j1; j++) {
       for (let i = i0; i <= i1; i++) {
         let idx = IX(i, j);
         if (solid[idx]) continue;
-        let px = i - cx, py = j - cy;
+        let wx = i * cellW - ob.x, wy = j * cellH - ob.y;
         if (ob.type === 'circle') {
-          if (px * px + py * py <= rg * rg) solid[idx] = 1;
+          if (wx * wx + wy * wy <= (obW(ob)/2) * (obW(ob)/2)) solid[idx] = 1;
         } else {
           let cosA = cos(-ob.rotation * PI / 180), sinA = sin(-ob.rotation * PI / 180);
-          let rx = px * cosA - py * sinA, ry = px * sinA + py * cosA;
-          if (abs(rx) <= rg && abs(ry) <= rg) solid[idx] = 1;
+          let rx = wx * cosA - wy * sinA, ry = wx * sinA + wy * cosA;
+          if (abs(rx) <= hw && abs(ry) <= hh) solid[idx] = 1;
         }
       }
     }
@@ -505,7 +533,6 @@ function timelineLoopTime() {
 }
 
 function isObstacleActive(ob) {
-  if (!timelineEnabled) return true;   // timeline off -> every obstacle always on
   let T = timelineDuration;
   let loopT = timelineLoopTime();
   let clips = ob.clips || [];
@@ -524,14 +551,14 @@ function isObstacleActive(ob) {
 function isInsideObstacle(px, py) {
   for (let ob of obstacles) {
     if (!isObstacleActive(ob)) continue;
+    if (ob.type === 'poly') { if (pointInPoly(px, py, ob.points)) return true; continue; }
     let dx = px - ob.x, dy = py - ob.y;
     if (ob.type === 'circle') {
-      if (dx*dx + dy*dy <= (ob.size/2)*(ob.size/2)) return true;
+      if (dx*dx + dy*dy <= (obW(ob)/2)*(obW(ob)/2)) return true;
     } else {
       let cosA = cos(-ob.rotation * PI / 180), sinA = sin(-ob.rotation * PI / 180);
       let rx = dx * cosA - dy * sinA, ry = dx * sinA + dy * cosA;
-      let h = ob.size / 2;
-      if (abs(rx) <= h && abs(ry) <= h) return true;
+      if (abs(rx) <= obW(ob)/2 && abs(ry) <= obH(ob)/2) return true;
     }
   }
   return false;
@@ -548,9 +575,7 @@ function initParticles() {
 }
 
 function settleParticle(p, bedHere) {
-  deposited.push({ x: p.x, y: p.y, z: bedHere });
-  depoBuffer.noStroke(); depoBuffer.fill(255,180,60,18); depoBuffer.ellipse(p.x,p.y,6,6);
-  depoBuffer.fill(255,210,100,11); depoBuffer.ellipse(p.x,p.y,3,3);
+  deposited.push({ x: p.x, y: p.y, z: bedHere, born: simTime });
   addDeposit(p.x, p.y, DEPO_AMOUNT);   // raise the bed where sediment settles
 }
 
@@ -600,14 +625,31 @@ function updateParticles() {
         if (!isObstacleActive(ob)) continue;
         let dx = p.x - ob.x, dy = p.y - ob.y, nx = 0, ny = 0, pen = 0;
         if (ob.type === 'circle') {
-          let r = ob.size / 2, d = Math.sqrt(dx * dx + dy * dy);
+          let r = obW(ob) / 2, d = Math.sqrt(dx * dx + dy * dy);
           if (d >= r || d === 0) continue;
           nx = dx / d; ny = dy / d; pen = r - d;
+        } else if (ob.type === 'poly') {
+          if (!pointInPoly(p.x, p.y, ob.points)) continue;
+          let pts = ob.points, n = pts.length, bestA = null, bestB = null, bestD = Infinity;
+          for (let k = 0; k < n; k++) {
+            let a = pts[k], b = pts[(k + 1) % n];
+            let dd = distToSeg(p.x, p.y, a.x, a.y, b.x, b.y);
+            if (dd < bestD) { bestD = dd; bestA = a; bestB = b; }
+          }
+          if (!bestA) continue;
+          let ex = bestB.x - bestA.x, ey = bestB.y - bestA.y;
+          let len = Math.sqrt(ex * ex + ey * ey) || 1;
+          let n1x = -ey / len, n1y = ex / len;
+          let pc = polyCentroid(pts);
+          let mxx = (bestA.x + bestB.x) / 2, myy = (bestA.y + bestB.y) / 2;
+          let away = (n1x * (pc.x - mxx) + n1y * (pc.y - myy)) < 0 ? 1 : -1;
+          nx = away * n1x; ny = away * n1y; pen = bestD;
         } else {
           let a = -ob.rotation * PI / 180, cosA = Math.cos(a), sinA = Math.sin(a);
-          let rx = dx * cosA - dy * sinA, ry = dx * sinA + dy * cosA, h = ob.size / 2;
-          if (Math.abs(rx) >= h || Math.abs(ry) >= h) continue;
-          let penX = h - Math.abs(rx), penY = h - Math.abs(ry);
+          let rx = dx * cosA - dy * sinA, ry = dx * sinA + dy * cosA;
+          let hw = obW(ob) / 2, hh = obH(ob) / 2;
+          if (Math.abs(rx) >= hw || Math.abs(ry) >= hh) continue;
+          let penX = hw - Math.abs(rx), penY = hh - Math.abs(ry);
           if (penX < penY) { nx = Math.sign(rx) * cosA; ny = Math.sign(rx) * sinA; pen = penX; }
           else { nx = -Math.sign(ry) * sinA; ny = Math.sign(ry) * cosA; pen = penY; }
         }
@@ -663,7 +705,6 @@ function updateParticles() {
       let bedHere2 = bedPoints.length >= 2 ? bedZ(d.x, d.y) : 0;
       let resist = bedHere2 > 0 ? 1.0/(1.0 + (bedHere2/160)*2.0) : 1.0;
       if (random() > resist) continue;
-      depoBuffer.noStroke(); depoBuffer.fill(10,10,20,80); depoBuffer.ellipse(d.x,d.y,8,8);
       addDeposit(d.x, d.y, -DEPO_AMOUNT);   // erode accumulated bed height
       particles.push({ x: d.x+random(-3,3), y: d.y+random(-3,3), vx: vel.vx+random(-0.5,0.5), vy: vel.vy+random(-0.5,0.5), born: simTime });
       deposited.splice(i, 1);
@@ -688,6 +729,19 @@ function updateParticles() {
 // ─────────────────────────────────────────────
 // VISUAL RENDERING
 // ─────────────────────────────────────────────
+function redrawDepoBuffer() {
+  depoBuffer.clear();
+  depoBuffer.noStroke();
+  let sr=parseInt(depoRecentColor.slice(1,3),16), sg=parseInt(depoRecentColor.slice(3,5),16), sb=parseInt(depoRecentColor.slice(5,7),16);
+  let or=parseInt(depoOldestColor.slice(1,3),16), og=parseInt(depoOldestColor.slice(3,5),16), ob=parseInt(depoOldestColor.slice(5,7),16);
+  for (let d of deposited) {
+    let t = constrain((simTime - (d.born || 0)) / MAX_PARTICLE_AGE, 0, 1);  // 0 = recent, 1 = oldest
+    let r = sr + (or - sr) * t, g = sg + (og - sg) * t, b = sb + (ob - sb) * t;
+    depoBuffer.fill(r, g, b, 110); depoBuffer.ellipse(d.x, d.y, depoSize, depoSize);
+    depoBuffer.fill(r, g, b, 230); depoBuffer.ellipse(d.x, d.y, depoSize * 0.55, depoSize * 0.55);
+  }
+}
+
 function drawDeposition() {
   // Dots are drawn once at settle time (in updateParticles); redrawing every frame
   // would stack alpha and darken deposition into a solid blob.
@@ -725,9 +779,12 @@ function drawSpotElevations() {
       if (solid[idx]) continue;
       let px = i*cellW, py = j*cellH;
       let z = bedZ(px, py);   // combined bed + deposition elevation
-      if (z <= 0) continue;
-      fill(255,215,110,200); ellipse(px, py, 4, 4);
-      fill(255,235,170,235); text(Math.round(z), px, py - 4);
+      if (z > 0) {
+        fill(255,215,110,200); ellipse(px, py, 4, 4);
+        fill(255,235,170,235); text(Math.round(z), px, py - 4);
+      } else {
+        fill(255,255,255,70); ellipse(px, py, 2, 2);
+      }
     }
   }
 }
@@ -738,15 +795,48 @@ function drawObstacles() {
   for (let i=0; i<obstacles.length; i++) {
     let ob = obstacles[i];
     if (!isObstacleActive(ob)) continue;
+
+    if (ob.type === 'poly') {
+      if (i===selectedIdx) { stroke(255,255,255,220); strokeWeight(2.5); }
+      else { stroke(255,255,255,140); strokeWeight(1.5); }
+      noFill();
+      beginShape();
+      for (let p of ob.points) vertex(p.x, p.y);
+      endShape(CLOSE);
+      if (i===selectedIdx) {
+        stroke(255,200,100,80); strokeWeight(4);
+        beginShape(); for (let p of ob.points) vertex(p.x, p.y); endShape(CLOSE);
+        for (let p of ob.points) { noStroke(); fill(255,200,100,230); ellipse(p.x, p.y, 8, 8); }
+      }
+      let c = polyCentroid(ob.points);
+      fill(255,255,255,220); noStroke(); textAlign(CENTER, CENTER); textSize(12);
+      text(String(i + 1), c.x, c.y);
+      continue;
+    }
+
+    let hw = obW(ob)/2, hh = obH(ob)/2;
     push(); translate(ob.x, ob.y); rotate(ob.rotation*PI/180);
     noFill();
     if (i===selectedIdx) { stroke(255,255,255,220); strokeWeight(2.5); }
     else { stroke(255,255,255,140); strokeWeight(1.5); }
-    let half = ob.size/2;
-    if (ob.type==='circle') ellipse(0,0,ob.size); else { rectMode(CENTER); rect(0,0,ob.size,ob.size); }
-    if (i===selectedIdx) { stroke(255,200,100,80); strokeWeight(4); if(ob.type==='circle')ellipse(0,0,ob.size+6);else rect(0,0,ob.size+6,ob.size+6); }
+    if (ob.type==='circle') ellipse(0,0,obW(ob)); else { rectMode(CENTER); rect(0,0,obW(ob),obH(ob)); }
+    if (i===selectedIdx) { stroke(255,200,100,80); strokeWeight(4); if(ob.type==='circle')ellipse(0,0,obW(ob)+6);else rect(0,0,obW(ob)+6,obH(ob)+6); }
     stroke(255,255,255,60); strokeWeight(0.5); line(-8,0,8,0); line(0,-8,0,8);
     pop();
+
+    if (i===selectedIdx) {
+      let cosT = cos(ob.rotation*PI/180), sinT = sin(ob.rotation*PI/180);
+      let handlePts = (ob.type==='circle')
+        ? [[hw,0],[0,hh],[-hw,0],[0,-hh]]
+        : [[-hw,-hh],[0,-hh],[hw,-hh],[hw,0],[hw,hh],[0,hh],[-hw,hh],[-hw,0]];
+      for (let h of handlePts) {
+        let wx = ob.x + h[0]*cosT - h[1]*sinT;
+        let wy = ob.y + h[0]*sinT + h[1]*cosT;
+        fill(255,255,255,235); stroke(255,200,100,200); strokeWeight(1); rectMode(CENTER);
+        rect(wx, wy, 9, 9);
+      }
+    }
+
     // timeline index centered on the object (upright, not rotated)
     fill(255,255,255,220); noStroke(); textAlign(CENTER, CENTER); textSize(12);
     text(String(i + 1), ob.x, ob.y);
@@ -754,7 +844,8 @@ function drawObstacles() {
 }
 
 function drawGhost() {
-  if (dragging || mouseX<0||mouseX>width||mouseY<0||mouseY>height) return;
+  if (ghostType === 'poly') { drawPolyPreview(); return; }
+  if (paused || dragging || mouseX<0||mouseX>width||mouseY<0||mouseY>height) return;
   let over = hitTestObstacle(mouseX,mouseY) >= 0;
   push(); translate(mouseX,mouseY); rotate(ghostRotation*PI/180);
   drawingContext.setLineDash([4,4]);
@@ -1068,6 +1159,9 @@ function setup() {
   document.getElementById('flow-dens').addEventListener('input', function(){flowDensity=parseInt(this.value);document.getElementById('flow-dens-val').textContent=flowDensity;});
   document.getElementById('flow-opacity').addEventListener('input', function(){flowOpacity=parseInt(this.value);document.getElementById('flow-opacity-val').textContent=flowOpacity;});
   document.getElementById('particle-count').addEventListener('input', function(){particleCount=parseInt(this.value);document.getElementById('particle-count-val').textContent=particleCount;while(particles.length+deposited.length<particleCount)particles.push(spawnParticle());});
+  document.getElementById('depo-size').addEventListener('input', function(){ depoSize=parseFloat(this.value); document.getElementById('depo-size-val').textContent=depoSize; redrawDepoBuffer(); });
+  document.getElementById('depo-recent').addEventListener('input', function(){ depoRecentColor=this.value; redrawDepoBuffer(); });
+  document.getElementById('depo-oldest').addEventListener('input', function(){ depoOldestColor=this.value; redrawDepoBuffer(); });
 
   // Toggles
   function updateToggles(){
@@ -1096,6 +1190,10 @@ function setup() {
   document.getElementById('reset-render').addEventListener('click',function(){
     trailFade=7;particleSize=2;slowColor='#ff44aa';fastColor='#ddeeff';
     colorThresh=0.5;flowScale=25;flowDensity=8;flowOpacity=140;
+    depoSize=6;depoRecentColor='#ffcc55';depoOldestColor='#6b4f3a';
+    document.getElementById('depo-size').value=6;document.getElementById('depo-size-val').textContent='6';
+    document.getElementById('depo-recent').value='#ffcc55';document.getElementById('depo-oldest').value='#6b4f3a';
+    redrawDepoBuffer();
     document.getElementById('trail-fade').value=7;document.getElementById('trail-fade-val').textContent='7';
     document.getElementById('particle-size').value=2;document.getElementById('particle-size-val').textContent='2';
     document.getElementById('slow-color').value='#ff44aa';document.getElementById('fast-color').value='#ddeeff';
@@ -1106,8 +1204,8 @@ function setup() {
   });
 
   addObstacle(width*0.2, height*0.35, 'circle', 0);
-  addObstacle(width*0.35, height*0.6, 'square', 30);
-  addObstacle(width*0.55, height*0.4, 'square', -15);
+  addObstacle(width*0.35, height*0.6, 'rect', 30);
+  addObstacle(width*0.55, height*0.4, 'rect', -15);
   // Default obstacles: spread across the loop so the timeline is meaningful out of
   // the box; drag/resize them on the timeline bar to re-choreograph.
   obstacles[0].clips = [{ start: 0, dur: timelineDuration / 3 }];
@@ -1137,7 +1235,7 @@ function draw() {
     updateParticles();
     drawDeposition();
     bedRenderAcc += DT;
-    if (bedRenderAcc >= 0.5) { bedRenderAcc = 0; updateBedBuffer(); }
+    if (bedRenderAcc >= 0.5) { bedRenderAcc = 0; updateBedBuffer(); redrawDepoBuffer(); }
   }
 
   background(10, 10, 20);
@@ -1159,7 +1257,7 @@ function draw() {
   drawParticles();
   drawObstacles();
   drawBedProfile();
-  if (!paused && !bedMode) drawGhost();
+  if (!bedMode) drawGhost();
   if (timelineEnabled) drawTimeline();
 
   if (showGrid) {
@@ -1193,26 +1291,130 @@ function windowResized() {
 }
 
 // ─────────────────────────────────────────────
+// SHAPE GEOMETRY + RESIZE HANDLES
+// ─────────────────────────────────────────────
+function obW(ob) { return (ob.w != null) ? ob.w : ob.size; }
+function obH(ob) { return (ob.h != null) ? ob.h : ob.size; }
+
+function pointInPoly(px, py, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    let xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+    if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+function distToSeg(px, py, ax, ay, bx, by) {
+  let dx = bx - ax, dy = by - ay, len2 = dx*dx + dy*dy;
+  let t = len2 ? constrain(((px-ax)*dx + (py-ay)*dy) / len2, 0, 1) : 0;
+  return dist(px, py, ax + t*dx, ay + t*dy);
+}
+
+function polyCentroid(pts) {
+  let cx = 0, cy = 0;
+  for (let p of pts) { cx += p.x; cy += p.y; }
+  return { x: cx / pts.length, y: cy / pts.length };
+}
+
+function hitPolyVertex(ob, mx, my) {
+  for (let i = 0; i < ob.points.length; i++) {
+    if (dist(mx, my, ob.points[i].x, ob.points[i].y) < 9) return i;
+  }
+  return -1;
+}
+
+function getResizeHandle(idx, mx, my) {
+  let ob = obstacles[idx];
+  if (ob.type === 'poly') return null;
+  let th = ob.rotation * PI / 180, cosT = cos(th), sinT = sin(th);
+  let dx = mx - ob.x, dy = my - ob.y;
+  let lx = dx * cosT + dy * sinT, ly = -dx * sinT + dy * cosT;
+  let hw = obW(ob)/2, hh = obH(ob)/2, GRAB = 8;
+  let handles = (ob.type === 'circle')
+    ? [['e', hw, 0], ['s', 0, hh], ['w', -hw, 0], ['n', 0, -hh]]
+    : [['nw',-hw,-hh],['n',0,-hh],['ne',hw,-hh],['e',hw,0],['se',hw,hh],['s',0,hh],['sw',-hw,hh],['w',-hw,0]];
+  for (let h of handles) if (abs(lx - h[1]) < GRAB && abs(ly - h[2]) < GRAB) return h[0];
+  return null;
+}
+
+function resizeObstacle(rd, mx, my) {
+  let ob = obstacles[rd.idx];
+  if (ob.type === 'circle') {
+    let r = max(3, dist(mx, my, ob.x, ob.y));
+    ob.w = r * 2; ob.h = r * 2;
+    return;
+  }
+  let th = ob.rotation * PI / 180, cosT = cos(th), sinT = sin(th);
+  let dx = mx - ob.x, dy = my - ob.y;
+  let lx = dx * cosT + dy * sinT, ly = -dx * sinT + dy * cosT;
+  let hw = obW(ob)/2, hh = obH(ob)/2, MIN = 3;
+  let ax = 0, ay = 0, fx = 0, fy = 0;
+  switch (rd.handle) {
+    case 'e':  ax = -1;        fx = 1; break;
+    case 'w':  ax = 1;         fx = 1; break;
+    case 's':  ay = -1;        fy = 1; break;
+    case 'n':  ay = 1;         fy = 1; break;
+    case 'ne': ax = -1; ay = 1;  fx = 1; fy = 1; break;
+    case 'nw': ax = 1;  ay = 1;  fx = 1; fy = 1; break;
+    case 'se': ax = -1; ay = -1; fx = 1; fy = 1; break;
+    case 'sw': ax = 1;  ay = -1; fx = 1; fy = 1; break;
+  }
+  let apx = ax * hw, apy = ay * hh, cxl = 0, cyl = 0;
+  if (fx) { let nw = max(MIN, abs(lx - apx) / 2); cxl = apx + (lx >= apx ? 1 : -1) * nw; ob.w = nw * 2; }
+  if (fy) { let nh = max(MIN, abs(ly - apy) / 2); cyl = apy + (ly >= apy ? 1 : -1) * nh; ob.h = nh * 2; }
+  ob.x += cxl * cosT - cyl * sinT;
+  ob.y += cxl * sinT + cyl * cosT;
+}
+
+function drawPolyPreview() {
+  if (polyPoints.length === 0) return;
+  if (polyPoints.length === 1) { noStroke(); fill(255,200,100); ellipse(polyPoints[0].x, polyPoints[0].y, 8, 8); return; }
+  noFill(); stroke(255,255,255,170); strokeWeight(1.5);
+  beginShape();
+  for (let p of polyPoints) vertex(p.x, p.y);
+  endShape();
+  stroke(255,255,255,90); strokeWeight(1);
+  line(polyPoints[polyPoints.length-1].x, polyPoints[polyPoints.length-1].y, mouseX, mouseY);
+  let f = polyPoints[0];
+  let closing = polyPoints.length >= 3 && dist(mouseX, mouseY, f.x, f.y) < 12;
+  noStroke(); fill(255,200,100);
+  ellipse(f.x, f.y, closing ? 12 : 8, closing ? 12 : 8);
+  if (closing) { noFill(); stroke(255,200,100,200); strokeWeight(1.5); ellipse(f.x, f.y, 16, 16); }
+}
+
+// ─────────────────────────────────────────────
 // INTERACTION
 // ─────────────────────────────────────────────
 function hitTestObstacle(mx, my) {
   for (let i=obstacles.length-1;i>=0;i--) {
     let ob=obstacles[i];
     if (!isObstacleActive(ob)) continue;
+    if (ob.type==='poly') {
+      if (pointInPoly(mx, my, ob.points)) return i;
+      for (let k=0;k<ob.points.length;k++) {
+        let a=ob.points[k], b=ob.points[(k+1)%ob.points.length];
+        if (distToSeg(mx, my, a.x, a.y, b.x, b.y) < 6) return i;
+      }
+      continue;
+    }
     let dx=mx-ob.x, dy=my-ob.y;
-    if (ob.type==='circle') { if (dx*dx+dy*dy<=(ob.size/2+6)*(ob.size/2+6)) return i; }
+    if (ob.type==='circle') { if (dx*dx+dy*dy<=(obW(ob)/2+6)*(obW(ob)/2+6)) return i; }
     else {
       let cosA=cos(-ob.rotation*PI/180), sinA=sin(-ob.rotation*PI/180);
-      let rx=dx*cosA-dy*sinA, ry=dx*sinA+dy*cosA, h=ob.size/2+6;
-      if (abs(rx)<=h&&abs(ry)<=h) return i;
+      let rx=dx*cosA-dy*sinA, ry=dx*sinA+dy*cosA;
+      if (abs(rx)<=obW(ob)/2+6&&abs(ry)<=obH(ob)/2+6) return i;
     }
   }
   return -1;
 }
 
 function addObstacle(x, y, type, rot) {
-  let loopT = timelineEnabled ? timelineLoopTime() : 0;
-  obstacles.push({ type, x, y, size: ghostSize, rotation: rot||0, clips: [{ start: loopT, dur: DEFAULT_OBJ_DUR }] });
+  obstacles.push({ type, x, y, w: ghostSize, h: ghostSize, rotation: rot||0, clips: [{ start: 0, dur: timelineDuration }] });
+}
+
+function addPolyObstacle(pts) {
+  obstacles.push({ type: 'poly', x: 0, y: 0, rotation: 0, points: pts.map(p => ({ x: p.x, y: p.y })), clips: [{ start: 0, dur: timelineDuration }] });
 }
 
 function deleteObstacle(idx) { if (idx>=0&&idx<obstacles.length) obstacles.splice(idx,1); }
@@ -1258,9 +1460,28 @@ function mousePressed(event) {
     return;
   }
 
+  if (selectedIdx >= 0) {
+    let h = getResizeHandle(selectedIdx, mouseX, mouseY);
+    if (h) { resizeDrag = { idx: selectedIdx, handle: h }; return; }
+    let sob = obstacles[selectedIdx];
+    if (sob.type === 'poly') {
+      let vi = hitPolyVertex(sob, mouseX, mouseY);
+      if (vi >= 0) { polyVertexDrag = { idx: selectedIdx, vi: vi }; return; }
+    }
+  }
+
   let hit = hitTestObstacle(mouseX, mouseY);
-  if (hit>=0) { selectedIdx=hit; selectedClip=-1; ghostRotation=obstacles[hit].rotation; ghostType=obstacles[hit].type; dragging=true; dragOffX=obstacles[hit].x-mouseX; dragOffY=obstacles[hit].y-mouseY; }
-  else { addObstacle(mouseX,mouseY,ghostType,ghostRotation); }
+  if (hit>=0) { selectedIdx=hit; selectedClip=-1; ghostRotation=obstacles[hit].rotation; ghostType=obstacles[hit].type; dragging=true; dragOffX=obstacles[hit].x-mouseX; dragOffY=obstacles[hit].y-mouseY; return; }
+
+  if (ghostType === 'poly') {
+    if (polyPoints.length >= 3 && dist(mouseX, mouseY, polyPoints[0].x, polyPoints[0].y) < 12) {
+      addPolyObstacle(polyPoints); polyPoints = [];
+    } else {
+      polyPoints.push({ x: mouseX, y: mouseY });
+    }
+    return;
+  }
+  addObstacle(mouseX,mouseY,ghostType,ghostRotation);
 }
 
 function mouseDragged(event) {
@@ -1285,10 +1506,12 @@ function mouseDragged(event) {
     }
     return;
   }
+  if (resizeDrag) { resizeObstacle(resizeDrag, mouseX, mouseY); return; }
+  if (polyVertexDrag) { let pv=obstacles[polyVertexDrag.idx]; pv.points[polyVertexDrag.vi]={x:mouseX,y:mouseY}; return; }
   if (dragging&&selectedIdx>=0) { obstacles[selectedIdx].x=mouseX+dragOffX; obstacles[selectedIdx].y=mouseY+dragOffY; }
 }
 
-function mouseReleased() { dragging=false; editingLongPt=-1; editingXSStation=null; }
+function mouseReleased() { dragging=false; resizeDrag=null; polyVertexDrag=null; editingLongPt=-1; editingXSStation=null; }
 
 function mouseWheel(event) {
   if (event && event.target && event.target.id==='timeline-canvas') return true;
@@ -1311,10 +1534,11 @@ function keyPressed() {
   else if (key==='f'||key==='F') { showFlow=!showFlow; }
   else if (key==='g'||key==='G') { showGrid=!showGrid; }
   else if (key==='h'||key==='H') { showHelp=!showHelp; }
-  else if (key==='1') { ghostType='circle'; }
-  else if (key==='2') { ghostType='square'; }
-  else if (key==='3') { ghostSize=max(20,ghostSize-5); }
-  else if (key==='4') { ghostSize=min(100,ghostSize+5); }
+  else if (key==='1') { ghostType='circle'; polyPoints=[]; }
+  else if (key==='2') { ghostType='rect'; polyPoints=[]; }
+  else if (key==='3') { ghostType='poly'; }
+  else if (key==='[') { ghostSize=max(20,ghostSize-5); }
+  else if (key===']') { ghostSize=min(100,ghostSize+5); }
   else if ((key==='Backspace'||key==='Delete')&&selectedIdx>=0&&selectedClip>=0) {
     let ob = obstacles[selectedIdx];
     if (ob && ob.clips && ob.clips.length > 0) { ob.clips.splice(selectedClip, 1); }
@@ -1332,7 +1556,7 @@ function keyPressed() {
       return;
     }
   }
-  else if (key==='Escape') { selectedIdx=-1; dragging=false; if(bedMode)bedMode=false; }
+  else if (key==='Escape') { selectedIdx=-1; dragging=false; resizeDrag=null; polyVertexDrag=null; polyPoints=[]; if(bedMode)bedMode=false; }
   else if (key==='m'||key==='M') { bedMode=!bedMode; if(bedMode)paused=true; }
   else if (key==='s'||key==='S') { saveCanvas('sediment-'+floor(simTime),'png'); }
   else if (key==='b'||key==='B') { bakeToOpenFOAM(); }
