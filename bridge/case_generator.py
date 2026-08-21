@@ -755,7 +755,7 @@ def generate_snappyHexMeshDict(state: SimState) -> str:
     """Generate snappyHexMeshDict for cutting obstacles."""
     stl_names = []
     for i, ob in enumerate(state.obstacles):
-        stl_names.append(f'    obstacle{i}.stl {{ type triSurfaceMesh; name obstacle{i}; }}')
+        stl_names.append(f'    "constant/triSurface/obstacle{i}.stl" {{ type triSurfaceMesh; name obstacle{i}; }}')
     stl_block = '\n'.join(stl_names) if stl_names else '    // no obstacles'
 
     return f"""/*--------------------------------*- C++ -*----------------------------------*\\
