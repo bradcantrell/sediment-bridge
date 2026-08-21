@@ -141,7 +141,7 @@ class JobManager:
             # simpleFoam with progress parsing
             self._update(job_id, "simpleFoam", 50)
             proc = subprocess.Popen(
-                of_prefix + f"simpleFoam -case {CASE_DIR}",
+                of_prefix + f"foamRun -solver incompressibleFluid -case {CASE_DIR}",
                 shell=True, executable='/bin/bash',
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1, start_new_session=True
@@ -171,7 +171,7 @@ class JobManager:
                 proc.wait()
                 raise
             if proc.returncode != 0:
-                raise RuntimeError(f"simpleFoam failed with exit code {proc.returncode}")
+                raise RuntimeError(f"foamRun failed with exit code {proc.returncode}")
             
             # Parse velocity field
             self._update(job_id, "parsing results", 98)

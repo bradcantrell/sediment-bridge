@@ -316,7 +316,7 @@ FoamFile
 }}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-application     simpleFoam;
+application     foamRun;
 
 startFrom       startTime;
 startTime       0;
@@ -523,7 +523,7 @@ FoamFile
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-transportModel  Newtonian;
+viscosityModel  constant;
 nu              [0 2 -1 0 0 0 0] 1e-06;  // water
 """
 
@@ -952,7 +952,7 @@ def run_case(case_dir: Path) -> dict:
     steps = [
         ("blockMesh", f"{of_prefix} blockMesh -case {case_dir}"),
         ("snappyHexMesh", f"{of_prefix} snappyHexMesh -overwrite -case {case_dir}"),
-        ("simpleFoam", f"{of_prefix} simpleFoam -case {case_dir}"),
+        ("simpleFoam", f"{of_prefix} foamRun -solver incompressibleFluid -case {case_dir}"),
     ]
 
     for name, cmd in steps:
