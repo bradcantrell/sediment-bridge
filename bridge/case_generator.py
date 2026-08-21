@@ -34,7 +34,7 @@ DOMAIN_D = 0.1               # Thin in z (2D approximation)
 # Mesh resolution
 NX_BG = 200   # Background mesh cells in x
 NY_BG = 110   # Background mesh cells in y
-NZ_BG = 1     # Single cell in z
+NZ_BG = 3     # cells in z (3D for snappyHexMesh)
 
 
 @dataclass
@@ -283,7 +283,7 @@ boundary
     }}
     frontAndBack
     {{
-        type empty;
+        type symmetry;
         faces
         (
             (0 3 2 1)
@@ -589,7 +589,7 @@ boundaryField
     }}
     frontAndBack
     {{
-        type            empty;
+        type symmetry;
     }}{obs_block}
 }}
 """
@@ -640,7 +640,7 @@ boundaryField
     }}
     frontAndBack
     {{
-        type            empty;
+        type symmetry;
     }}{obs_block}
 }}
 """
@@ -676,7 +676,7 @@ boundaryField
     outlet  {{ type zeroGradient; }}
     top     {{ type kqRWallFunction; value uniform 0.001; }}
     bottom  {{ type kqRWallFunction; value uniform 0.001; }}
-    frontAndBack {{ type empty; }}{obs_block}
+    frontAndBack {{ type symmetry; }}{obs_block}
 }}
 """
 
@@ -711,7 +711,7 @@ boundaryField
     outlet  {{ type zeroGradient; }}
     top     {{ type epsilonWallFunction; value uniform 0.0001; }}
     bottom  {{ type epsilonWallFunction; value uniform 0.0001; }}
-    frontAndBack {{ type empty; }}{obs_block}
+    frontAndBack {{ type symmetry; }}{obs_block}
 }}
 """
 
@@ -746,7 +746,7 @@ boundaryField
     outlet  {{ type calculated; value uniform 0; }}
     top     {{ type nutkWallFunction; value uniform 0; }}
     bottom  {{ type nutkWallFunction; value uniform 0; }}
-    frontAndBack {{ type empty; }}{obs_block}
+    frontAndBack {{ type symmetry; }}{obs_block}
 }}
 """
 
@@ -907,7 +907,7 @@ def create_case(state: SimState, case_dir: Path):
     # TriSurface directory for STL files
     tri_dir = const_dir / "triSurface"
     tri_dir.mkdir(exist_ok=True)
-    z_min, z_max = -DOMAIN_D / 2, DOMAIN_D / 2
+    z_min, z_max = -0.005, DOMAIN_D + 0.005
     for i, ob in enumerate(state.obstacles):
         cx_m = px_to_m(ob.x)
         cy_m = px_to_m(DOMAIN_H / SCALE - ob.y)  # Flip y: canvas y=0 → top, OpenFOAM y=0 → bottom
